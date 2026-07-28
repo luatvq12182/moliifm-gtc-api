@@ -1,0 +1,28 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: gtc_mongo
+    restart: unless-stopped
+    volumes:
+      - gtc_mongo_data:/data/db
+    # Không map port ra host — chỉ gtc-api trong cùng file này cần kết nối
+    # tới, tránh xung đột với container MongoDB khác (lms_mongo) đang chiếm
+    # sẵn port 27017 trên VPS.
+
+  gtc-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gtc_api
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./uploads:/app/uploads
+
+volumes:
+  gtc_mongo_data:
