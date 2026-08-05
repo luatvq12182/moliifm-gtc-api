@@ -89,6 +89,36 @@ const studentLogin = asyncHandler(async function studentLogin(req, res) {
     throw new Error('Email hoặc mật khẩu không đúng.')
   }
 
+  // ===== Kiểm tra giới hạn thiết bị (1 desktop + 1 mobile) =====
+  const { deviceId, deviceType } = req.body
+  if (!deviceId || !['desktop', 'mobile'].includes(deviceType)) {
+    res.status(400)
+    throw new Error('Thiếu thông tin thiết bị.')
+  }
+
+  const slot = student.devices?.[deviceType]
+  const deviceLabel = deviceType === 'mobile' ? 'điện thoại' : 'máy tính'
+
+  if (!slot || !slot.deviceId) {
+    // Slot trống -> ghi nhận thiết bị này làm thiết bị đầu tiên
+    if (!student.devices) student.devices = {}
+    student.devices[deviceType] = {
+      deviceId,
+      userAgent: req.headers['user-agent'] || '',
+      firstLoginAt: new Date(),
+    }
+    await student.save()
+  } else if (slot.deviceId !== deviceId) {
+    // Slot đã có thiết bị khác -> chặn
+    res.status(403)
+    throw new Error(
+      `Tài khoản này đã được sử dụng trên một ${deviceLabel} khác. ` +
+      `Nếu bạn vừa đổi thiết bị, vui lòng liên hệ trung tâm để được hỗ trợ mở khóa.`
+    )
+  }
+  // Nếu slot.deviceId === deviceId -> đúng thiết bị cũ, cho qua bình thường
+  // ============================================================
+
   const token = signStudentToken(student)
 
   res.json({

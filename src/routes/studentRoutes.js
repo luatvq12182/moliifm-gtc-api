@@ -7,6 +7,7 @@ const {
   toggleStudentStatus,
   resetStudentPassword,
   deleteStudent,
+  resetStudentDevices,
 } = require('../controllers/studentController')
 const { protectAdmin } = require('../middleware/auth')
 
@@ -22,5 +23,6 @@ router.put('/:id', updateStudent)
 router.patch('/:id/status', toggleStudentStatus)
 router.patch('/:id/reset-password', resetStudentPassword)
 router.delete('/:id', deleteStudent)
+router.patch('/:id/reset-devices', resetStudentDevices)
 
 module.exports = router

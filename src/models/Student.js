@@ -39,6 +39,21 @@ const studentSchema = new mongoose.Schema(
       enum: ['active', 'locked'],
       default: 'active',
     },
+    // 2 slot thiết bị được phép: 1 desktop + 1 mobile. Ghi nhận deviceId ở
+    // lần đăng nhập đầu tiên của mỗi loại; thiết bị khác cùng loại sẽ bị chặn
+    // cho tới khi admin reset slot đó về null.
+    devices: {
+      desktop: {
+        deviceId: { type: String, default: null },
+        userAgent: { type: String, default: '' },
+        firstLoginAt: { type: Date, default: null },
+      },
+      mobile: {
+        deviceId: { type: String, default: null },
+        userAgent: { type: String, default: '' },
+        firstLoginAt: { type: Date, default: null },
+      },
+    },
   },
   { timestamps: true }
 )

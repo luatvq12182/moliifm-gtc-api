@@ -159,6 +159,33 @@ const resetStudentPassword = asyncHandler(async function resetStudentPassword(re
   res.json({ message: 'Đã đặt lại mật khẩu.', tempPassword })
 })
 
+// PATCH /api/students/:id/reset-devices  body: { target: 'desktop' | 'mobile' | 'both' }
+const resetStudentDevices = asyncHandler(async function resetStudentDevices(req, res) {
+  const { target } = req.body
+  if (!['desktop', 'mobile', 'both'].includes(target)) {
+    res.status(400)
+    throw new Error('Loại thiết bị cần reset không hợp lệ.')
+  }
+
+  const student = await Student.findById(req.params.id)
+  if (!student) {
+    res.status(404)
+    throw new Error('Không tìm thấy học viên.')
+  }
+
+  if (!student.devices) student.devices = {}
+  const emptySlot = { deviceId: null, userAgent: '', firstLoginAt: null }
+
+  if (target === 'desktop' || target === 'both') student.devices.desktop = emptySlot
+  if (target === 'mobile' || target === 'both') student.devices.mobile = emptySlot
+
+  await student.save()
+  res.json({
+    message: 'Đã reset thiết bị thành công.',
+    devices: student.devices,
+  })
+})
+
 module.exports = {
   getStudents,
   getStudent,
@@ -167,4 +194,5 @@ module.exports = {
   toggleStudentStatus,
   deleteStudent,
   resetStudentPassword,
+  resetStudentDevices,
 }
