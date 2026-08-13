@@ -24,6 +24,11 @@ const ISE_PATH = '/v2/ise'
 const IAT_HOST = 'iat-api-sg.xf-yun.com'
 const IAT_PATH = '/v2/iat'
 
+// Độ nghiêm khi chấm/bắt lỗi: 'easy' | 'common' | 'hard'.
+// HSK sơ cấp nên để 'common' (hoặc 'easy' cho lớp mới); 'hard' quá nghiêm,
+// đọc đúng vẫn dễ bị bắt lỗi. Cho phép chỉnh qua ENV mà không sửa code.
+const ISE_CHECK_TYPE = process.env.XF_ISE_CHECK_TYPE || 'hard'
+
 const DEBUG = process.env.XF_DEBUG === '1'
 function dbg(...args) {
     if (DEBUG) console.log('[iflytek]', ...args)
@@ -62,6 +67,59 @@ function handshakeHint(statusCode) {
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '' })
 
+// Chỉ giữ node thuộc nội dung đề bài. iFLYTEK chèn thêm node nhiễu/im lặng
+// (rec_node_type = 'fil' hoặc 'sil') vào giữa các chữ — các node này mang
+// dp_message=32 (tăng đọc) NHƯNG KHÔNG phải chữ học viên đọc thừa, mà chỉ là
+// tiếng ồn/khoảng lặng. Nếu không lọc, chúng bị gán nhầm "đọc thừa" cho chữ
+// Hán bên cạnh (đây chính là bug "今/下 báo đọc thừa oan").
+function isPaper(node) {
+    return node && node.rec_node_type === 'paper'
+}
+
+// Phân loại lỗi của MỘT chữ (word), tách bạch 2 trục:
+//   - dp_message (tăng/giảm/lặp/thay thế): {0,16,32,64,128}
+//   - perr_msg (sai thanh mẫu/vần/thanh điệu): {0,1,2,3} kèm is_yun
+// Trả về nhãn tiếng Việt cụ thể để học viên biết đường sửa.
+function classifyWord(w) {
+    // Chỉ xét các syll thuộc đề bài (bỏ fil/sil).
+    const sylls = [].concat(w.syll || []).filter(isPaper)
+    if (sylls.length === 0) return null // chữ chỉ toàn nhiễu -> bỏ khỏi kết quả
+
+    let dpIssue = 0 // mã dp_message nghiêm trọng nhất (16/32/64/128)
+    let phoneErr = 0 // mã perr_msg nghiêm trọng nhất (1/2/3)
+    let isYun = 0 // 0 = phụ âm đầu (声母), 1 = vần (韵母) — của phone lỗi
+
+    sylls.forEach((sy) => {
+        const syDp = parseInt(sy.dp_message ?? '0', 10)
+        if ([16, 32, 64, 128].includes(syDp) && syDp > dpIssue) dpIssue = syDp
+
+        const phones = [].concat(sy.phone || []).filter(isPaper)
+        phones.forEach((p) => {
+            const pe = parseInt(p.perr_msg ?? '0', 10)
+            if (pe > 0 && pe > phoneErr) {
+                phoneErr = pe
+                isYun = parseInt(p.is_yun ?? '0', 10)
+            }
+            // dp_message cũng có thể xuất hiện ở tầng phone.
+            const pDp = parseInt(p.dp_message ?? '0', 10)
+            if ([16, 32, 64, 128].includes(pDp) && pDp > dpIssue) dpIssue = pDp
+        })
+    })
+
+    // Ưu tiên báo lỗi tăng/giảm/thay thế trước (ảnh hưởng lớn hơn),
+    // sau đó mới tới lỗi thanh mẫu/vần/thanh điệu.
+    let issue = ''
+    if (dpIssue === 16) issue = 'đọc thiếu'
+    else if (dpIssue === 32) issue = 'đọc thừa'
+    else if (dpIssue === 64) issue = 'đọc lặp'
+    else if (dpIssue === 128) issue = 'đọc sai (thay thế)'
+    else if (phoneErr === 2) issue = 'sai thanh điệu'
+    else if (phoneErr === 1) issue = isYun === 1 ? 'sai vần' : 'sai phụ âm đầu'
+    else if (phoneErr === 3) issue = 'sai âm và thanh điệu'
+
+    return { issue, ok: issue === '' }
+}
+
 function parseIseXml(xmlString) {
     const obj = xmlParser.parse(xmlString)
     const xmlResult = obj.xml_result || {}
@@ -81,18 +139,6 @@ function parseIseXml(xmlString) {
         except_info: paper?.except_info || null,
     }
 
-    // Mã trạng thái đọc từng chữ.
-    const codeMap = {
-        0: '',
-        1: 'sai âm',
-        2: 'sai thanh điệu',
-        3: 'sai cả âm và thanh điệu',
-        16: 'đọc thiếu',
-        32: 'đọc thừa',
-        64: 'đọc lặp',
-        128: 'đọc sai',
-    }
-
     const chars = []
     const collectWords = (node) => {
         if (!node) return
@@ -100,25 +146,15 @@ function parseIseXml(xmlString) {
         sentences.forEach((s) => {
             const words = [].concat(s.word || [])
             words.forEach((w) => {
-                const sylls = [].concat(w.syll || [])
-                let worst = 0
-                sylls.forEach((sy) => {
-                    const syDp = parseInt(sy.dp_message ?? '0', 10)
-                    if (syDp > worst) worst = syDp
-                    const phones = [].concat(sy.phone || [])
-                    phones.forEach((p) => {
-                        const pv = parseInt(p.perr_msg ?? '0', 10)
-                        if (pv > worst) worst = pv
-                        const pDp = parseInt(p.dp_message ?? '0', 10)
-                        if (pDp > worst) worst = pDp
-                    })
-                })
+                // Bỏ chữ không có nội dung, hoặc bản thân là nhiễu/im lặng.
                 if (!w.content || w.content === 'sil' || w.content === 'fil') return
+                const cls = classifyWord(w)
+                if (!cls) return // chữ chỉ toàn nhiễu (không có syll 'paper')
                 chars.push({
                     content: w.content,
                     pinyin: w.symbol || '',
-                    issue: codeMap[worst] ?? '',
-                    ok: worst === 0,
+                    issue: cls.issue,
+                    ok: cls.ok,
                 })
             })
         })
@@ -149,7 +185,7 @@ function runIse(pcmBuffer, text, onResult, onError) {
             category: 'read_sentence',
             rstcd: 'utf8',
             sub: 'ise',
-            group: 'adult', // FIX cứng theo yêu cầu
+            group: 'adult',
             ent: 'cn_vip',
             tte: 'utf-8',
             cmd: 'ssb',
@@ -159,7 +195,7 @@ function runIse(pcmBuffer, text, onResult, onError) {
             ttp_skip: true,
             ise_unite: '1',
             extra_ability: 'multi_dimension;syll_phone_err_msg',
-            check_type: 'hard', // FIX cứng theo yêu cầu
+            check_type: ISE_CHECK_TYPE, // 'common' cho HSK sơ cấp (đổi qua ENV)
         }
         ws.send(JSON.stringify({ common: { app_id: APPID }, business, data: { status: 0 } }))
 
