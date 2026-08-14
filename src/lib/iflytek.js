@@ -78,8 +78,9 @@ function isPaper(node) {
 
 // Phân loại lỗi của MỘT chữ (word), tách bạch 2 trục:
 //   - dp_message (tăng/giảm/lặp/thay thế): {0,16,32,64,128}
-//   - perr_msg (sai thanh mẫu/vần/thanh điệu): {0,1,2,3} kèm is_yun
+//   - perr_msg (sai thanh mẫu/vận mẫu/thanh điệu): {0,1,2,3} kèm is_yun
 // Trả về nhãn tiếng Việt cụ thể để học viên biết đường sửa.
+// Thuật ngữ Hán ngữ: thanh mẫu (声母), vận mẫu (韵母), thanh điệu (声调).
 function classifyWord(w) {
     // Chỉ xét các syll thuộc đề bài (bỏ fil/sil).
     const sylls = [].concat(w.syll || []).filter(isPaper)
@@ -113,8 +114,11 @@ function classifyWord(w) {
     else if (dpIssue === 32) issue = 'đọc thừa'
     else if (dpIssue === 64) issue = 'đọc lặp'
     else if (dpIssue === 128) issue = 'đọc sai (thay thế)'
+    // Thuật ngữ Hán ngữ chuẩn (theo yêu cầu khách): 声母 = thanh mẫu (phụ âm
+    // đầu), 韵母 = vận mẫu (phần vần), 声调 = thanh điệu (dấu).
+    // is_yun: 0 = thanh mẫu, 1 = vận mẫu.
     else if (phoneErr === 2) issue = 'sai thanh điệu'
-    else if (phoneErr === 1) issue = isYun === 1 ? 'sai vần' : 'sai phụ âm đầu'
+    else if (phoneErr === 1) issue = isYun === 1 ? 'sai vận mẫu' : 'sai thanh mẫu'
     else if (phoneErr === 3) issue = 'sai âm và thanh điệu'
 
     return { issue, ok: issue === '' }
