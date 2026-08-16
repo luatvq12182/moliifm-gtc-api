@@ -20,7 +20,13 @@ const vocabularyItemSchema = new mongoose.Schema(
         pinyin: { type: String, default: '' },
         pos: { type: String, default: '' },
         meaning: { type: String, default: '' },
+        // GIỮ LẠI để tương thích ngược: các bài đã seed trước đây dùng "example"
+        // (một ví dụ duy nhất). Không xóa để dữ liệu cũ vẫn hiển thị bình thường.
         example: { type: exampleSchema, default: () => ({}) },
+        // MỚI: cho phép một từ có NHIỀU ví dụ. Bài mới nên ghi vào đây.
+        // Frontend đọc: nếu "examples" có phần tử thì dùng nó, ngược lại fallback
+        // về "example" cũ. Mặc định mảng rỗng nên bài cũ không bị ảnh hưởng.
+        examples: { type: [exampleSchema], default: [] },
     },
     { _id: false }
 )
@@ -42,6 +48,11 @@ const trueFalseQuestionSchema = new mongoose.Schema(
         statement: { type: String, required: true },
         pinyin: { type: String, default: '' },
         correct: { type: Boolean, required: true },
+        // Khi đáp án là "Sai": câu sửa cho đúng (chữ Hán) + phiên âm.
+        // Chỉ dùng khi correct === false. Bài cũ không có -> mặc định rỗng,
+        // giao diện tự ẩn phần sửa nếu trống.
+        correction: { type: String, default: '' },
+        correctionPinyin: { type: String, default: '' },
     },
     { _id: false }
 )
@@ -66,18 +77,18 @@ const shortAnswerQuestionSchema = new mongoose.Schema(
 )
 
 const videoSchema = new mongoose.Schema(
-  {
-    title: { type: String, trim: true, default: '' },
-    description: { type: String, trim: true, default: '' },
-    // "upload" -> dùng videoUrl (đường dẫn file tự host)
-    // "youtube" -> dùng youtubeId (chỉ 11 ký tự ID, không lưu URL đầy đủ)
-    type: { type: String, enum: ['upload', 'youtube'], default: 'upload' },
-    videoUrl: { type: String, trim: true, default: '' },
-    youtubeId: { type: String, trim: true, default: '' },
-    order: { type: Number, default: 0 },
-    dialogue: { type: [dialogueLineSchema], default: [] },
-  },
-  { _id: false }
+    {
+        title: { type: String, trim: true, default: '' },
+        description: { type: String, trim: true, default: '' },
+        // "upload" -> dùng videoUrl (đường dẫn file tự host)
+        // "youtube" -> dùng youtubeId (chỉ 11 ký tự ID, không lưu URL đầy đủ)
+        type: { type: String, enum: ['upload', 'youtube'], default: 'upload' },
+        videoUrl: { type: String, trim: true, default: '' },
+        youtubeId: { type: String, trim: true, default: '' },
+        order: { type: Number, default: 0 },
+        dialogue: { type: [dialogueLineSchema], default: [] },
+    },
+    { _id: false }
 )
 
 const lessonSchema = new mongoose.Schema(
