@@ -27,12 +27,19 @@ const IAT_PATH = '/v2/iat'
 // Độ nghiêm khi chấm/bắt lỗi: 'easy' | 'common' | 'hard'.
 // HSK sơ cấp nên để 'common' (hoặc 'easy' cho lớp mới); 'hard' quá nghiêm,
 // đọc đúng vẫn dễ bị bắt lỗi. Cho phép chỉnh qua ENV mà không sửa code.
-const ISE_CHECK_TYPE = process.env.XF_ISE_CHECK_TYPE || 'hard'
+const ISE_CHECK_TYPE = process.env.XF_ISE_CHECK_TYPE || 'common'
 
 const DEBUG = process.env.XF_DEBUG === '1'
 function dbg(...args) {
     if (DEBUG) console.log('[iflytek]', ...args)
 }
+
+// Nhịp gửi từng frame audio lên iFLYTEK (ms). Audio đã thu xong nằm sẵn trong
+// buffer khi chấm, nên KHÔNG cần gửi theo nhịp thời gian thực (40ms) như lúc
+// thu trực tiếp. Gửi nhanh hơn (10ms) giúp câu dài stream xong sớm hơn nhiều
+// lần, giảm mạnh nguy cơ timeout. 10ms vẫn an toàn với ngưỡng nhận của iFLYTEK
+// (không nên để 0 vì gửi quá gấp có thể bị báo lỗi tốc độ).
+const AUDIO_SEND_INTERVAL_MS = 10
 
 // Kiểm tra đã cấu hình key chưa (dùng để báo lỗi sớm, rõ ràng).
 function isConfigured() {
@@ -223,7 +230,7 @@ function runIse(pcmBuffer, text, onResult, onError) {
             firstAudio = false
             offset = end
             if (isLast) clearInterval(timer)
-        }, 40)
+        }, AUDIO_SEND_INTERVAL_MS)
     })
 
     ws.on('message', (raw) => {
@@ -320,7 +327,7 @@ function runIat(pcmBuffer, onResult, onError) {
             )
             offset = end
             if (isLast) clearInterval(timer)
-        }, 40)
+        }, AUDIO_SEND_INTERVAL_MS)
     })
 
     ws.on('message', (raw) => {
