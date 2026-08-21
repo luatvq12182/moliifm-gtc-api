@@ -2,3 +2,6 @@ uploads
 node_modules
 .env
 npm-debug.log
+
+# Bản ghi âm luyện nói của học viên (dữ liệu cá nhân) — không đưa lên git
+storage/

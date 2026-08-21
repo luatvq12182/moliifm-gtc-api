@@ -7,9 +7,17 @@ const adminCourseRoutes = require('./adminCourseRoutes')
 const adminLessonRoutes = require('./adminLessonRoutes')
 const uploadRoutes = require('./uploadRoutes')
 
+const { features } = require('../config/features')
+
 const router = express.Router()
 
 router.get('/health', (req, res) => res.json({ status: 'ok' }))
+
+// Cờ tính năng cho frontend. Công khai, không chứa gì nhạy cảm — chỉ để giao
+// diện biết có nên hiện mục "Lịch sử luyện nói" trong trang quản trị hay không.
+router.get('/config', (req, res) =>
+  res.json({ practiceHistoryEnabled: features.practiceHistoryEnabled })
+)
 
 router.use('/auth', authRoutes)
 router.use('/students', studentRoutes)
