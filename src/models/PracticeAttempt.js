@@ -8,6 +8,12 @@ const charResultSchema = new mongoose.Schema(
         pinyin: String,
         issue: String, // '' nếu đọc đúng; ngược lại: 'sai thanh mẫu', 'đọc thiếu'...
         ok: Boolean,
+        // 'good' | 'fair' | 'weak' — ba mức, suy từ perr_level_msg của iFLYTEK.
+        // Chữ được coi là đúng thì cao nhất chỉ tới 'fair', không bao giờ 'weak'.
+        level: String,
+        // Vị trí chữ này trong file ghi âm (ms), để cắt ra nghe lại đúng chữ đó.
+        begMs: Number,
+        endMs: Number,
     },
     { _id: false }
 )
@@ -59,6 +65,21 @@ const practiceAttemptSchema = new mongoose.Schema(
         // Vì rawScores ở trên vẫn giữ nguyên điểm gốc iFLYTEK, có thể chấm lại
         // toàn bộ lịch sử bằng công thức khác mà không cần ghi âm lại.
         pronScore: { type: Number, default: null },
+
+        // Đối chiếu câu mà IAT nghe được với câu mẫu — nhân chứng ĐỘC LẬP với
+        // ISE. ISE ép khớp audio vào câu mẫu nên đọc ra chữ gì nó cũng cố khớp;
+        // IAT thì không biết câu mẫu. Tỉ lệ khớp được dùng làm TRẦN cho điểm.
+        // Xem lib/spokenTextMatch.js.
+        spokenMatch: {
+            applicable: { type: Boolean, default: false },
+            ratio: { type: Number, default: null }, // 0..1
+            matched: { type: Number, default: 0 },
+            total: { type: Number, default: 0 },
+            missedText: { type: String, default: '' }, // chữ trong câu mẫu không được nghe ra
+            cap: { type: Number, default: null }, // null = không siết
+            cappedFrom: { type: Number, default: null }, // điểm gốc trước khi siết
+        },
+
         // Nhận xét theo TỪ (gom từ chars). Không ảnh hưởng tới pronScore.
         words: {
             type: [
@@ -80,6 +101,15 @@ const practiceAttemptSchema = new mongoose.Schema(
         // 'per-char' = không gom được, giữ nguyên từng chữ
         wordGroupingMethod: { type: String, default: '' },
         feedback: { type: String, default: '' },
+
+        // XML THÔ mà iFLYTEK trả về, giữ nguyên không xử lý.
+        //
+        // Đây là nguồn sự thật duy nhất để đối chứng khi có tranh cãi kiểu "vì
+        // sao chữ 哦 bị báo sai thanh mẫu trong khi âm tiết này không có thanh
+        // mẫu". Không có XML thô thì mọi kết luận về nhãn lỗi đều là suy đoán.
+        //
+        // Chỉ lưu khi PRACTICE_HISTORY_ENABLED bật (giai đoạn phát triển).
+        rawXml: { type: String, default: '' },
         isRejected: { type: Boolean, default: false },
         exceptInfo: { type: String, default: null },
         spokenText: { type: String, default: '' }, // "Nội dung bạn nói" từ IAT

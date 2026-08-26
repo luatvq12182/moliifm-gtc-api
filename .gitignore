@@ -5,3 +5,6 @@ npm-debug.log
 
 # Bản ghi âm luyện nói của học viên (dữ liệu cá nhân) — không đưa lên git
 storage/
+
+# File xuất XML để đối chứng — không đưa lên git
+ise-xml-dump.txt

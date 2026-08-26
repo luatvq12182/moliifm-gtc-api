@@ -61,8 +61,16 @@ function countSyllables(token) {
 // Tách chuỗi pinyin thành các token là từ. Dấu câu và khoảng trắng đều là ranh
 // giới; dấu nháy đơn thì KHÔNG (nó nằm trong từ, vd. nǚ'ér).
 function tokenizePinyin(pinyin) {
+    // Dải À-ÿ (U+00C0-U+00FF) đã bao gồm các nguyên âm hoa dấu sắc/huyền
+    // (Á À É È Í Ì Ó Ò Ú Ù), NHƯNG KHÔNG có dấu ngang và dấu ngã của pinyin —
+    // Ā Ǎ Ē Ě Ī Ǐ Ō Ǒ Ū Ǔ Ǖ Ǘ Ǚ Ǜ nằm ở Latin Extended-A/B, phải liệt kê riêng.
+    //
+    // Thiếu chúng thì token ĐẦU CÂU bị nuốt mất với mọi câu bắt đầu bằng nguyên
+    // âm có dấu. Ví dụ thật: "Ō, zhè shì nǐ de nǚ'ér ma?..." mất token "Ō" ->
+    // đếm 13 âm tiết thay vì 14 -> lệch số chữ -> chốt an toàn kích hoạt -> lùi
+    // về phương án dự phòng, sinh ra cách gom sai như 女|儿吗 (儿吗 không phải từ).
     return (pinyin || '')
-        .split(/[^A-Za-zÀ-ÿüÜāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ']+/)
+        .split(/[^A-Za-zÀ-ÿüÜāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀǍĒĚĪǏŌǑŪǓǕǗǙǛ']+/)
         .map((t) => t.replace(/^'+|'+$/g, ''))
         .filter((t) => t.length > 0)
 }
@@ -86,9 +94,13 @@ function pinyinCandidates(pinyin) {
     return candidates
 }
 
-// Thanh nhẹ: iFLYTEK đánh số 5 hoặc 9 ở cuối phiên âm (vd. me5, zi9).
+// Thanh nhẹ (轻声). Theo tài liệu iFLYTEK về thuộc tính `symbol`: phiên âm kèm
+// số thanh 1-9, trong đó 5, 0, 6, 7, 8, 9 ĐỀU là thanh nhẹ — chỉ 1-4 là bốn
+// thanh thật.
+//
+// Bản cũ chỉ bắt 5 và 9, bỏ sót 0, 6, 7, 8.
 function isNeutralTone(charPinyin) {
-    return /[59]$/.test(charPinyin || '')
+    return /[05-9]$/.test(charPinyin || '')
 }
 
 /**

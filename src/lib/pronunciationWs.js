@@ -19,8 +19,13 @@ const jwt = require('jsonwebtoken')
 const { isConfigured, assessAndRecognize } = require('./iflytek')
 const { features } = require('../config/features')
 const { savePracticeAudio, SAMPLE_RATE } = require('./audioStorage')
+
+// Trần độ dài XML lưu vào DB. XML của một câu ~14 chữ thường 20-60KB; đặt trần
+// để một phản hồi bất thường không làm phình bản ghi.
+const MAX_RAW_XML_CHARS = 256 * 1024
 const { computePronunciationScore } = require('./pronunciationScore')
 const { buildWordFeedback } = require('./wordFeedback')
+const { computeSpokenMatch } = require('./spokenTextMatch')
 const Student = require('../models/Student')
 const PracticeAttempt = require('../models/PracticeAttempt')
 
@@ -122,7 +127,7 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
 
         // Ghi lịch sử luyện nói. Không bao giờ được làm hỏng luồng chấm điểm:
         // học viên đã có kết quả rồi, lưu trữ thất bại thì chỉ log lại.
-        async function savePracticeHistory(pcm, assessment, spokenText, score, wordFeedback) {
+        async function savePracticeHistory(pcm, assessment, spokenText, score, wordFeedback, spokenMatch) {
             if (!features.practiceHistoryEnabled) return
             try {
                 const audio = await savePracticeAudio(student._id, pcm, SAMPLE_RATE)
@@ -147,6 +152,17 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                         integrity_score: s.integrity_score,
                     },
                     pronScore: score.score,
+                    spokenMatch: spokenMatch
+                        ? {
+                            applicable: spokenMatch.applicable,
+                            ratio: spokenMatch.ratio,
+                            matched: spokenMatch.matched,
+                            total: spokenMatch.total,
+                            missedText: spokenMatch.missedText,
+                            cap: spokenMatch.cap,
+                            cappedFrom: score.cappedFrom ?? null,
+                        }
+                        : undefined,
                     words: wordFeedback.words.map((w) => ({
                         content: w.content,
                         pinyin: w.pinyin,
@@ -156,6 +172,7 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                     })),
                     wordGroupingMethod: wordFeedback.method,
                     feedback: wordFeedback.feedback,
+                    rawXml: (assessment.rawXml || '').slice(0, MAX_RAW_XML_CHARS),
                     isRejected: Boolean(s.is_rejected),
                     exceptInfo: s.except_info || null,
                     spokenText: spokenText || '',
@@ -240,6 +257,26 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
 
                         const score = computePronunciationScore(assessment.summary)
 
+                        // NHÂN CHỨNG ĐỘC LẬP: IAT không biết câu mẫu, nghe được
+                        // gì ghi nấy. ISE thì ép khớp audio vào câu mẫu nên đọc
+                        // ra chữ gì nó cũng cố khớp — đó là lý do một bài đọc ra
+                        // 母狼哺乳 thay vì 不冷不热 vẫn được 83 điểm.
+                        // Dùng tỉ lệ khớp của IAT làm TRẦN điểm. Xem lib/spokenTextMatch.js.
+                        const spokenMatch = computeSpokenMatch(referenceText, spokenText)
+                        if (
+                            spokenMatch.cap !== null &&
+                            typeof score.score === 'number' &&
+                            score.score > spokenMatch.cap
+                        ) {
+                            score.cappedFrom = score.score
+                            score.score = spokenMatch.cap
+                        }
+                        // Ghi nhận riêng việc "có chữ bị nghe ra chữ khác", tách
+                        // khỏi việc điểm có bị hạ hay không. Có lần trần bằng
+                        // đúng điểm gốc nên không hạ được gì, mà học viên vẫn
+                        // cần biết mình đã đọc chệch ba chữ.
+                        score.spokenMismatch = spokenMatch.cap !== null
+
                         // Nhận xét THEO TỪ (không đụng tới điểm số). Gom chữ
                         // thành từ dựa vào phiên âm câu mẫu để dập bớt lỗi báo
                         // oan ở âm tiết thanh nhẹ — xem lib/wordFeedback.js.
@@ -253,10 +290,12 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                             words: wordFeedback.words,
                             focusWord: wordFeedback.focusWord,
                             feedback: wordFeedback.feedback,
+                            score,
+                            spokenMatch,
                         })
                         // Lưu SAU khi đã trả kết quả -> học viên không phải chờ
                         // thao tác ghi đĩa.
-                        await savePracticeHistory(pcm, assessment, spokenText, score, wordFeedback)
+                        await savePracticeHistory(pcm, assessment, spokenText, score, wordFeedback, spokenMatch)
                     } catch (err) {
                         sendJson({
                             type: 'error',

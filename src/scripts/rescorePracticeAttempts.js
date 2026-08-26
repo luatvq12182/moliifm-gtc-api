@@ -22,6 +22,7 @@ const connectDB = require('../config/db')
 const PracticeAttempt = require('../models/PracticeAttempt')
 const { computePronunciationScore } = require('../lib/pronunciationScore')
 const { buildWordFeedback } = require('../lib/wordFeedback')
+const { computeSpokenMatch } = require('../lib/spokenTextMatch')
 
 const DRY_RUN = process.argv.includes('--dry')
 
@@ -39,6 +40,8 @@ async function main() {
 
     for (const attempt of attempts) {
         const summary = {
+            // total_score BẮT BUỘC phải có: điểm hiển thị giờ lấy thẳng từ nó.
+            total_score: attempt.rawScores?.total_score,
             phone_score: attempt.rawScores?.phone_score,
             tone_score: attempt.rawScores?.tone_score,
             fluency_score: attempt.rawScores?.fluency_score,
@@ -46,6 +49,14 @@ async function main() {
             is_rejected: attempt.isRejected,
         }
         const score = computePronunciationScore(summary)
+
+        // Siết trần theo đối chiếu IAT, giống hệt luồng chạy thật.
+        const spokenMatch = computeSpokenMatch(attempt.referenceText, attempt.spokenText)
+        let cappedFrom = null
+        if (spokenMatch.cap !== null && typeof score.score === 'number' && score.score > spokenMatch.cap) {
+            cappedFrom = score.score
+            score.score = spokenMatch.cap
+        }
         // Dựng lại luôn phần nhận xét theo từ cho các bản ghi cũ (chưa có).
         const wordFeedback = buildWordFeedback(attempt.chars || [], attempt.referencePinyin)
 
@@ -67,6 +78,15 @@ async function main() {
 
         if (!DRY_RUN) {
             attempt.pronScore = score.score
+            attempt.spokenMatch = {
+                applicable: spokenMatch.applicable,
+                ratio: spokenMatch.ratio,
+                matched: spokenMatch.matched,
+                total: spokenMatch.total,
+                missedText: spokenMatch.missedText,
+                cap: spokenMatch.cap,
+                cappedFrom,
+            }
             attempt.words = wordFeedback.words.map((w) => ({
                 content: w.content,
                 pinyin: w.pinyin,

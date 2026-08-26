@@ -13,17 +13,64 @@
 
 const { groupCharsIntoWords } = require('./wordSegmentation')
 
-// Mức độ nghiêm trọng của từng loại lỗi, quy về thang 100.
+// Mức độ nghiêm trọng của lỗi, quy về thang 100.
 //
-// Lỗi thanh điệu bị trừ NHẸ HƠN lỗi thanh mẫu/vận mẫu: đọc sai thanh thì âm
-// tiết vẫn nhận ra được, còn đọc sai thanh mẫu/vận mẫu là thành một chữ khác
-// hẳn. Lỗi nhịp (thừa/thiếu/lặp) không phải lỗi phát âm nên trừ ít nhất.
-const ISSUE_SCORE = {
+// Tính từ CÁC CỜ LỖI (initial/final/tone) mà lib/iflytek.js trả về, không phải
+// từ chuỗi tiếng Việt. Trước đây hàm này tra bảng theo chuỗi ("sai thanh mẫu",
+// "sai thanh điệu"...) — cách đó vỡ ngay khi một chữ sai nhiều thứ cùng lúc và
+// nhãn trở thành "sai thanh mẫu và thanh điệu", không khớp khoá nào trong bảng
+// nên rơi về giá trị mặc định.
+//
+// Lỗi thanh mẫu/vận mẫu bị trừ NẶNG HƠN lỗi thanh điệu: đọc sai thanh thì âm
+// tiết vẫn nhận ra được, còn đọc sai thanh mẫu hoặc vận mẫu là thành một chữ
+// khác hẳn. Sai nhiều trục cùng lúc thì cộng dồn.
+const DP_SCORE = {
+    16: 10, // đọc thiếu
+    32: 65, // đọc thừa  — lỗi nhịp, không phải lỗi phát âm
+    64: 65, // đọc lặp
+    128: 25, // đọc sai (thay thế)
+}
+
+function charScore(c) {
+    if (c.ok) return 100
+
+    const d = c.detail
+    // Bản ghi cũ (lưu trước khi có `detail`) thì lùi về tra bảng theo chuỗi.
+    if (!d) return LEGACY_ISSUE_SCORE[c.issue] ?? 45
+
+    if (d.dp && DP_SCORE[d.dp] !== undefined) return DP_SCORE[d.dp]
+
+    if (!d.initial && !d.final && !d.tone) {
+        return d.unknown ? 55 : 100 // có lỗi nhưng không rõ trục -> trừ vừa phải
+    }
+
+    const segmentErrors = (d.initial ? 1 : 0) + (d.final ? 1 : 0)
+    let score
+    if (segmentErrors === 2) score = d.tone ? 25 : 30
+    else if (segmentErrors === 1) score = d.tone ? 35 : 45
+    else score = 70 // chỉ sai thanh điệu
+
+    // perr_level_msg = 2 nghĩa là lỗi ở mức BIÊN, không phải sai hẳn (xem ghi
+    // chú trong lib/iflytek.js). Ví dụ đo được: chữ 卫 sai vận mẫu ở mức 2 (hơi
+    // lệch) trong khi chữ 好 sai ở mức 3 (sai hẳn). Nới tay cho lỗi mức biên
+    // để học viên không bị đánh đồng với người đọc sai hoàn toàn.
+    //
+    // KHÔNG áp dụng cho lỗi thanh điệu: perr_level_msg chấm chất lượng âm đoạn
+    // chứ không chấm thanh, nên với lỗi thanh thì con số này không nói lên điều
+    // gì về mức độ. Nới tay dựa trên một chỉ số không liên quan là tự đánh lừa.
+    if (d.errorLevel === 2 && !d.tone) score = Math.min(100, score + 18)
+
+    return score
+}
+
+// Chỉ dùng cho bản ghi cũ chưa có cờ `detail`.
+const LEGACY_ISSUE_SCORE = {
     '': 100,
     'sai thanh điệu': 70,
     'sai vận mẫu': 45,
     'sai thanh mẫu': 45,
     'sai âm và thanh điệu': 35,
+    'phát âm chưa chuẩn': 55,
     'đọc thừa': 65,
     'đọc lặp': 65,
     'đọc sai (thay thế)': 25,
@@ -58,15 +105,10 @@ const ISSUE_SCORE = {
 // Cơ chế đã được gỡ bỏ hoàn toàn. Nếu định làm lại: phải kiểm chứng trên các
 // lượt ĐỌC CHUẨN (phone_score cao), không phải lượt đọc kém.
 
-// Ngưỡng xếp loại một TỪ, xét theo âm tiết TỆ NHẤT trong từ (xem buildWord).
+// Ngưỡng tham khảo cho ĐIỂM SỐ của một từ. Việc XẾP LOẠI (good/fair/weak) giờ
+// lấy thẳng mức tệ nhất trong các chữ, không suy từ điểm — xem buildWord.
 const WORST_GOOD = 100 // không có lỗi nào
 const WORST_FAIR = 65 // chỉ sai thanh điệu, hoặc lỗi nhịp
-
-function charScore(c) {
-    if (c.ok) return 100
-    const score = ISSUE_SCORE[c.issue]
-    return typeof score === 'number' ? score : 45
-}
 
 /**
  * Xếp loại một từ.
@@ -114,7 +156,23 @@ function buildWord(group) {
     })
 
     const score = Math.round(0.5 * worst + 0.5 * average)
-    const status = worst >= WORST_GOOD ? 'good' : worst >= WORST_FAIR ? 'fair' : 'weak'
+
+    // Mức của TỪ = mức TỆ NHẤT trong các chữ của nó, lấy thẳng từ c.level.
+    //
+    // Trước đây mức của từ suy từ điểm số (`worst`), mà charScore trả về 100 cho
+    // MỌI chữ được coi là đúng — kể cả chữ ở mức 'fair' (hơi lệch, perr_level_msg=2).
+    // Hậu quả: từ 天气 hiện XANH trong khi chữ 气 bên trong hiện VÀNG. Lại đúng
+    // kiểu mâu thuẫn "viền nói một đằng, chữ nói một nẻo" đã phải sửa một lần rồi.
+    //
+    // Lấy thẳng từ c.level thì hai tầng KHÔNG THỂ lệch nhau: màu của từ luôn
+    // bằng màu của chữ tệ nhất trong nó, theo đúng định nghĩa chứ không phải
+    // nhờ hai phép tính riêng biệt tình cờ cho ra cùng kết quả.
+    const LEVEL_RANK = { good: 0, fair: 1, weak: 2 }
+    const worstRank = group.reduce((acc, c) => {
+        const rank = LEVEL_RANK[c.level] ?? (c.ok ? 0 : 2) // bản ghi cũ chưa có level
+        return rank > acc ? rank : acc
+    }, 0)
+    const status = ['good', 'fair', 'weak'][worstRank]
 
     return {
         content: group.map((c) => c.content).join(''),
@@ -137,25 +195,39 @@ function buildWord(group) {
 function buildFeedback(words) {
     if (words.length === 0) return ''
 
-    const weak = words.filter((w) => w.status !== 'good').sort((a, b) => a.score - b.score)
-    const strong = words.filter((w) => w.status === 'good').sort((a, b) => b.score - a.score)
+    // Phân biệt SAI HẲN với HƠI LỆCH. Gộp chung hai loại lại thì câu phản hồi
+    // liệt kê gần hết số từ trong câu và nghe như học viên chẳng đọc được gì —
+    // trong khi thực tế phần lớn chỉ lệch nhẹ. Có ba mức thì phải dùng cả ba.
+    const weak = words.filter((w) => w.status === 'weak').sort((a, b) => a.score - b.score)
+    const fair = words.filter((w) => w.status === 'fair').sort((a, b) => a.score - b.score)
+    const good = words.filter((w) => w.status === 'good').sort((a, b) => b.score - a.score)
 
-    if (weak.length === 0) {
+    if (weak.length === 0 && fair.length === 0) {
         return 'Cả câu bạn đọc rất chuẩn, không có từ nào cần chỉnh. Giữ nguyên phong độ này nhé!'
     }
 
-    const worst = weak[0]
     const parts = []
-
-    if (strong.length > 0) {
-        parts.push(`Từ ${strong[0].content} bạn đọc rất rõ!`)
+    if (good.length > 0) {
+        parts.push(`Từ ${good[0].content} bạn đọc rất rõ!`)
     }
 
-    if (weak.length === 1) {
-        parts.push(`Chỉ còn từ ${worst.content} cần luyện thêm.`)
+    if (weak.length > 0) {
+        // Có từ sai hẳn -> đó là ưu tiên duy nhất. Không nhắc tới các từ chỉ hơi
+        // lệch, để học viên tập trung vào đúng một chỗ.
+        if (weak.length === 1) {
+            parts.push(`Từ ${weak[0].content} cần luyện lại kỹ.`)
+        } else {
+            const others = weak.slice(1, 3).map((w) => w.content).join('、')
+            parts.push(`Từ ${weak[0].content} cần luyện lại kỹ, sau đó tới ${others}.`)
+        }
     } else {
-        const others = weak.slice(1, 3).map((w) => w.content).join('、')
-        parts.push(`Từ ${worst.content} cần luyện thêm, sau đó tới ${others}.`)
+        // Chỉ toàn lỗi nhẹ -> nói rõ là gần đạt rồi, đừng làm học viên nản.
+        const list = fair.slice(0, 2).map((w) => w.content).join('、')
+        parts.push(
+            fair.length === 1
+                ? `Từ ${list} gần chuẩn rồi, chỉnh thêm chút nữa là đạt.`
+                : `Cả câu gần chuẩn rồi, chỉ cần chỉnh nhẹ ở ${list}.`
+        )
     }
 
     return parts.join(' ')
@@ -173,8 +245,12 @@ function buildWordFeedback(chars, referencePinyin) {
     const { groups, method } = groupCharsIntoWords(chars || [], referencePinyin)
     const words = groups.map(buildWord)
 
+    // Từ tiêu điểm BẮT BUỘC phải có lỗi thật (issue khác rỗng). Trước đây chỉ
+    // lọc theo status !== 'good', nên một từ không hề có lỗi vẫn bị đưa lên thẻ
+    // "cần luyện lại" kèm dòng mặc định "Phát âm chưa đúng" — trong khi chẳng
+    // có gì chưa đúng cả.
     const weakest = words
-        .filter((w) => w.status !== 'good')
+        .filter((w) => w.status !== 'good' && w.issue)
         .sort((a, b) => a.score - b.score)[0]
 
     return {

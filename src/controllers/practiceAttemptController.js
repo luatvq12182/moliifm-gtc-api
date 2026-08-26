@@ -39,9 +39,12 @@ const getStudentPracticeAttempts = asyncHandler(async function getStudentPractic
 
     // Không trả audioPath ra ngoài — đó là chi tiết lưu trữ nội bộ. Client chỉ
     // cần biết CÓ file ghi âm hay không, rồi gọi route audio bằng id.
-    const data = attempts.map(({ audioPath, ...rest }) => ({
+    // rawXml cũng bị loại: nặng vài chục KB mỗi bản ghi và giao diện không dùng
+    // tới. Muốn xem thì dùng script npm run dump:xml.
+    const data = attempts.map(({ audioPath, rawXml, ...rest }) => ({
         ...rest,
         hasAudio: Boolean(audioPath),
+        hasRawXml: Boolean(rawXml),
     }))
 
     res.json({

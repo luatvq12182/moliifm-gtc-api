@@ -27,19 +27,25 @@ const IAT_PATH = '/v2/iat'
 // Độ nghiêm khi chấm/bắt lỗi: 'easy' | 'common' | 'hard'.
 // HSK sơ cấp nên để 'common' (hoặc 'easy' cho lớp mới); 'hard' quá nghiêm,
 // đọc đúng vẫn dễ bị bắt lỗi. Cho phép chỉnh qua ENV mà không sửa code.
-const ISE_CHECK_TYPE = process.env.XF_ISE_CHECK_TYPE || 'common'
+const ISE_CHECK_TYPE = process.env.XF_ISE_CHECK_TYPE || 'hard'
 
 const DEBUG = process.env.XF_DEBUG === '1'
 function dbg(...args) {
     if (DEBUG) console.log('[iflytek]', ...args)
 }
 
-// Nhịp gửi từng frame audio lên iFLYTEK (ms). Audio đã thu xong nằm sẵn trong
-// buffer khi chấm, nên KHÔNG cần gửi theo nhịp thời gian thực (40ms) như lúc
-// thu trực tiếp. Gửi nhanh hơn (10ms) giúp câu dài stream xong sớm hơn nhiều
-// lần, giảm mạnh nguy cơ timeout. 10ms vẫn an toàn với ngưỡng nhận của iFLYTEK
-// (không nên để 0 vì gửi quá gấp có thể bị báo lỗi tốc độ).
-const AUDIO_SEND_INTERVAL_MS = 10
+// Nhịp và kích thước frame khi đẩy audio lên iFLYTEK.
+//
+// Tài liệu quy định: "1280B mỗi 40ms, kích thước có thể điều chỉnh", trần
+// 19.200B/frame. Audio đã thu xong nằm sẵn trong buffer nên ta muốn gửi nhanh
+// hơn thời gian thực để câu dài không bị timeout.
+//
+// BẢN CŨ gửi 1280B mỗi 10ms — nhanh gấp 4 lần, nhưng bằng cách RÚT NGẮN NHỊP,
+// tức là chạy ngoài vùng tài liệu bảo đảm và có nguy cơ bị chặn tốc độ. Cách
+// đúng để tăng tốc là GIỮ NHỊP 40ms và TĂNG KÍCH THƯỚC FRAME. 5120B/40ms cho
+// đúng tốc độ gấp 4 như cũ, mà vẫn nằm trọn trong quy định.
+const AUDIO_SEND_INTERVAL_MS = 40
+const AUDIO_FRAME_BYTES = 5120 // 4 x 1280, trần cho phép là 19200
 
 // Kiểm tra đã cấu hình key chưa (dùng để báo lỗi sớm, rõ ràng).
 function isConfigured() {
@@ -83,52 +89,222 @@ function isPaper(node) {
     return node && node.rec_node_type === 'paper'
 }
 
-// Phân loại lỗi của MỘT chữ (word), tách bạch 2 trục:
-//   - dp_message (tăng/giảm/lặp/thay thế): {0,16,32,64,128}
-//   - perr_msg (sai thanh mẫu/vận mẫu/thanh điệu): {0,1,2,3} kèm is_yun
-// Trả về nhãn tiếng Việt cụ thể để học viên biết đường sửa.
-// Thuật ngữ Hán ngữ: thanh mẫu (声母), vận mẫu (韵母), thanh điệu (声调).
+// Ghép nhãn lỗi tiếng Việt từ các trục lỗi đã phát hiện.
+function joinIssues(parts) {
+    if (parts.length === 0) return ''
+    if (parts.length === 1) return `sai ${parts[0]}`
+    if (parts.length === 2) return `sai ${parts[0]} và ${parts[1]}`
+    return `sai ${parts.slice(0, -1).join(', ')} và ${parts[parts.length - 1]}`
+}
+
+// Phone giả của âm tiết ZERO THANH MẪU.
+//
+// Quan sát từ XML thật (24/08/2026): iFLYTEK biểu diễn âm tiết không có thanh
+// mẫu bằng một phone có dấu gạch dưới ở đầu, và gán cho nó is_yun="0":
+//
+//   卫 wèi  -> <phone content="_u"  is_yun="0" .../>
+//   样 yàng -> <phone content="_i"  is_yun="0" .../>
+//
+// Nhưng `_u` và `_i` KHÔNG phải thanh mẫu — chúng là GIỚI ÂM (介音), mà trong
+// âm vận học Hán ngữ giới âm là 韵头, thuộc về VẬN MẪU. is_yun=0 ở đây là quy
+// ước nội bộ của iFLYTEK chứ không phải phân loại ngôn ngữ học.
+//
+// Đây chính là nguồn của nhãn "sai thanh mẫu" gán cho 哦 (ō) — một âm tiết
+// không hề có thanh mẫu, nên nhãn đó bất khả thi. Coi các phone này là vận mẫu.
+function isZeroInitialPlaceholder(phone) {
+    return typeof phone.content === 'string' && phone.content.startsWith('_')
+}
+
+/**
+ * Phân loại lỗi của MỘT chữ (word).
+ *
+ * ĐỌC TÀI LIỆU iFLYTEK TRƯỚC KHI SỬA HÀM NÀY:
+ *   perr_msg = 0  đúng
+ *   perr_msg = 1  sai thanh mẫu (nếu is_yun=0) HOẶC sai vận mẫu (nếu is_yun=1)
+ *   perr_msg = 2  sai thanh điệu — CHỈ xuất hiện khi is_yun=1
+ *   perr_msg = 3  sai CẢ vận mẫu LẪN thanh điệu — CHỈ khi is_yun=1
+ *   is_yun   = 0  thanh mẫu (声母)  |  1  vận mẫu (韵母)
+ *
+ * BẢN CŨ SAI Ở ĐÂY: nó lấy perr_msg LỚN NHẤT trong các phone rồi chỉ báo một
+ * lỗi. Nhưng perr_msg là MÃ PHÂN LOẠI, không phải thang mức độ. Kiểm chứng trên
+ * XML thật:
+ *
+ *   好 = phone h (is_yun=0, perr_msg=1) + phone ao (is_yun=1, perr_msg=3)
+ *        cũ: lấy max=3 -> "sai âm và thanh điệu", NUỐT MẤT lỗi thanh mẫu
+ *        mới: "sai thanh mẫu, vận mẫu và thanh điệu"
+ *
+ *   字 = phone z (is_yun=0, perr_msg=1) + phone ii (is_yun=1, perr_msg=1)
+ *        cũ: hai giá trị bằng nhau, `>` không thoả ở phone sau -> giữ phone
+ *            ĐẦU TIÊN -> "sai thanh mẫu", nhãn phụ thuộc thứ tự XML
+ *        mới: "sai thanh mẫu và vận mẫu"
+ *
+ * BẢN NÀY xét TỪNG phone độc lập rồi gom thành tập hợp các trục lỗi.
+ */
 function classifyWord(w) {
     // Chỉ xét các syll thuộc đề bài (bỏ fil/sil).
     const sylls = [].concat(w.syll || []).filter(isPaper)
     if (sylls.length === 0) return null // chữ chỉ toàn nhiễu -> bỏ khỏi kết quả
 
-    let dpIssue = 0 // mã dp_message nghiêm trọng nhất (16/32/64/128)
-    let phoneErr = 0 // mã perr_msg nghiêm trọng nhất (1/2/3)
-    let isYun = 0 // 0 = phụ âm đầu (声母), 1 = vần (韵母) — của phone lỗi
+    // Vị trí của chữ này TRONG BẢN GHI ÂM, tính bằng mili giây.
+    //
+    // Tài liệu: beg_pos/end_pos tính theo KHUNG HÌNH, mỗi khung 10ms. Đã kiểm
+    // trên file thật: end_pos cao nhất x 10ms = 3280ms so với file dài 3304ms,
+    // lệch 24ms — tức là mốc thời gian khớp với audio.
+    //
+    // LẤY TỪ TẦNG syll CHỨ KHÔNG PHẢI tầng word: node word BAO GỒM cả khoảng
+    // lặng/nhiễu đứng trước nó. Ví dụ thật, chữ 大:
+    //   <word beg_pos="0" end_pos="188">        <- gồm cả 1,51 giây im lặng
+    //     <syll content="sil" beg_pos="0"   end_pos="151"/>
+    //     <syll content="大"  beg_pos="151" end_pos="188"/>   <- tiếng thật ở đây
+    // Dùng mốc của word thì cắt ra toàn khoảng lặng.
+    const begs = sylls.map((sy) => parseInt(sy.beg_pos ?? '-1', 10)).filter((v) => v >= 0)
+    const ends = sylls.map((sy) => parseInt(sy.end_pos ?? '-1', 10)).filter((v) => v >= 0)
+    const begMs = begs.length > 0 ? Math.min(...begs) * 10 : null
+    const endMs = ends.length > 0 ? Math.max(...ends) * 10 : null
+
+    let dpIssue = 0
+
+    // GHI CHÚ TRUNG THỰC: hai nguồn tín hiệu dưới đây được thêm vào theo tài
+    // liệu, nhưng kiểm tra XML thật (24/08/2026, category=read_sentence,
+    // ent=cn_vip) thì KHÔNG THẤY XUẤT HIỆN:
+    //   - dp_message ở tầng `word`  (chỉ thấy ở tầng syll và phone)
+    //   - serr_msg   ở tầng `syll`  (không thấy ở đâu cả)
+    // Giữ lại làm lưới an toàn phòng khi iFLYTEK đổi định dạng hoặc khi dùng
+    // category khác. Đừng trông cậy vào chúng, và đừng tưởng chúng đang chạy.
+    const wDp = parseInt(w.dp_message ?? '0', 10)
+    if ([16, 32, 64, 128].includes(wDp)) dpIssue = wDp
+
+    let initialWrong = false // sai thanh mẫu
+    let finalWrong = false // sai vận mẫu
+    let toneWrong = false // sai thanh điệu
+    let unknownPhoneErr = false // có lỗi nhưng không xác định được thuộc trục nào
+    let syllErr = false // serr_msg báo âm tiết đọc sai (chưa quan sát thấy)
+
+    // perr_level_msg: KHÔNG CÓ TRONG TÀI LIỆU, nhưng xuất hiện trên mọi phone
+    // của XML thật với giá trị 1-3. Quan sát cho thấy đây là thang MỨC ĐỘ, độc
+    // lập với perr_msg:
+    //   1 = tốt   2 = tạm/hơi lệch   3 = kém rõ rệt
+    // Bằng chứng nó độc lập: chữ 叫 và 么 có perr_msg=0 (không lỗi) nhưng
+    // perr_level_msg=2; chữ 大 có perr_msg=2 (sai thanh) nhưng level=1.
+    //
+    // CHỈ dùng để phân biệt lỗi RÕ RỆT với lỗi BIÊN — vd. 卫 sai vận mẫu ở mức
+    // 2 (hơi lệch) trong khi 好 sai ở mức 3 (sai hẳn).
+    //
+    // TUYỆT ĐỐI KHÔNG dùng nó để tự tuyên bố lỗi mới. Đã từng cho phone sạch có
+    // perr_level_msg=2 hiện màu vàng, và hậu quả là một bài đọc mà iFLYTEK chấm
+    // phone_score=100, tone_score=100, KHÔNG một perr_msg nào khác 0 — vẫn hiện
+    // 2 từ vàng kèm thẻ "Phát âm chưa đúng" với điểm 100. Tự chế ra lỗi mà máy
+    // chấm không hề báo, đúng thứ khách hàng phàn nàn suốt là "báo lỗi oan".
+    //
+    // Nguyên tắc: chữ nào iFLYTEK bảo ĐÚNG thì hiển thị là ĐÚNG. Hết.
+    let errorLevel = 0 // mức của phone lỗi nặng nhất
+    let maxCleanLevel = 1 // chỉ ghi lại để chẩn đoán, KHÔNG dùng để tô màu
 
     sylls.forEach((sy) => {
         const syDp = parseInt(sy.dp_message ?? '0', 10)
         if ([16, 32, 64, 128].includes(syDp) && syDp > dpIssue) dpIssue = syDp
 
+        const se = parseInt(sy.serr_msg ?? '0', 10)
+        if (se === 1 || se === 2049) syllErr = true
+
         const phones = [].concat(sy.phone || []).filter(isPaper)
         phones.forEach((p) => {
-            const pe = parseInt(p.perr_msg ?? '0', 10)
-            if (pe > 0 && pe > phoneErr) {
-                phoneErr = pe
-                isYun = parseInt(p.is_yun ?? '0', 10)
-            }
-            // dp_message cũng có thể xuất hiện ở tầng phone.
             const pDp = parseInt(p.dp_message ?? '0', 10)
             if ([16, 32, 64, 128].includes(pDp) && pDp > dpIssue) dpIssue = pDp
+
+            const level = parseInt(p.perr_level_msg ?? '1', 10) || 1
+            const pe = parseInt(p.perr_msg ?? '0', 10)
+
+            if (!pe) {
+                if (level > maxCleanLevel) maxCleanLevel = level
+                return
+            }
+            if (level > errorLevel) errorLevel = level
+
+            // Suy ra is_yun. Tài liệu khẳng định perr_msg 2 và 3 CHỈ tồn tại ở
+            // phone vận mẫu, nên với hai mã đó ta biết chắc is_yun=1 mà không
+            // cần đọc thuộc tính.
+            let isYun = null
+            if (pe === 2 || pe === 3) isYun = 1
+            else if (isZeroInitialPlaceholder(p)) isYun = 1 // phone giả `_x` -> giới âm, thuộc vận mẫu
+            else if (p.is_yun !== undefined && p.is_yun !== null) isYun = parseInt(p.is_yun, 10)
+
+            if (pe === 1) {
+                if (isYun === 0) initialWrong = true
+                else if (isYun === 1) finalWrong = true
+                else unknownPhoneErr = true // thiếu is_yun -> không đoán bừa
+            } else if (pe === 2) {
+                toneWrong = true
+            } else if (pe === 3) {
+                finalWrong = true
+                toneWrong = true
+            } else {
+                unknownPhoneErr = true
+            }
         })
     })
 
-    // Ưu tiên báo lỗi tăng/giảm/thay thế trước (ảnh hưởng lớn hơn),
-    // sau đó mới tới lỗi thanh mẫu/vần/thanh điệu.
+    // Ưu tiên báo lỗi tăng/giảm/thay thế trước (ảnh hưởng lớn hơn), sau đó mới
+    // tới lỗi thanh mẫu/vận mẫu/thanh điệu.
+    // Thuật ngữ Hán ngữ: 声母 = thanh mẫu, 韵母 = vận mẫu, 声调 = thanh điệu.
     let issue = ''
     if (dpIssue === 16) issue = 'đọc thiếu'
     else if (dpIssue === 32) issue = 'đọc thừa'
     else if (dpIssue === 64) issue = 'đọc lặp'
     else if (dpIssue === 128) issue = 'đọc sai (thay thế)'
-    // Thuật ngữ Hán ngữ chuẩn (theo yêu cầu khách): 声母 = thanh mẫu (phụ âm
-    // đầu), 韵母 = vận mẫu (phần vần), 声调 = thanh điệu (dấu).
-    // is_yun: 0 = thanh mẫu, 1 = vận mẫu.
-    else if (phoneErr === 2) issue = 'sai thanh điệu'
-    else if (phoneErr === 1) issue = isYun === 1 ? 'sai vận mẫu' : 'sai thanh mẫu'
-    else if (phoneErr === 3) issue = 'sai âm và thanh điệu'
+    else {
+        const parts = []
+        if (initialWrong) parts.push('thanh mẫu')
+        if (finalWrong) parts.push('vận mẫu')
+        if (toneWrong) parts.push('thanh điệu')
+        issue = joinIssues(parts)
+        if (!issue && (unknownPhoneErr || syllErr)) issue = 'phát âm chưa chuẩn'
+    }
 
-    return { issue, ok: issue === '' }
+    const hasError = issue !== ''
+
+    // Quy về ba mức hiển thị: 'good' | 'fair' | 'weak'.
+    //
+    // LỖI THANH ĐIỆU LUÔN LÀ 'weak'. Lý do:
+    // perr_level_msg chấm chất lượng ÂM ĐOẠN, không chấm thanh điệu — bằng
+    // chứng: qua 3 file XML thật, mọi lỗi thanh điệu thuần tuý (perr_msg=2)
+    // đều đi kèm perr_level_msg là 1 hoặc 2, chưa lần nào là 3. Nghĩa là ta
+    // KHÔNG CÓ thông tin mức độ cho lỗi thanh. Mà trong tiếng Trung, sai thanh
+    // điệu là thành một chữ khác hẳn (妈/麻/马/骂), nên không có dữ liệu thì
+    // phải mặc định coi là nặng, chứ không phải coi là nhẹ.
+    //
+    // Đọc thiếu và đọc sai (thay thế) cũng luôn 'weak'. Đọc thừa/đọc lặp chỉ là
+    // lỗi nhịp, không phải lỗi phát âm -> 'fair'.
+    //
+    // Giữ nguyên nguyên tắc: chữ nào iFLYTEK bảo ĐÚNG thì cao nhất chỉ tới
+    // 'fair', không bao giờ thành 'weak' — ta không tự tạo ra lỗi mới.
+    let level
+    if (!hasError) {
+        level = 'good' // iFLYTEK bảo đúng -> hiển thị là đúng, không bàn thêm
+    } else if (dpIssue === 32 || dpIssue === 64) {
+        level = 'fair' // đọc thừa / đọc lặp: sai nhịp, không sai âm
+    } else if (toneWrong || dpIssue === 16 || dpIssue === 128) {
+        level = 'weak'
+    } else {
+        level = errorLevel >= 3 ? 'weak' : 'fair'
+    }
+
+    return {
+        issue,
+        ok: !hasError,
+        level,
+        begMs, // vị trí chữ này trong bản ghi âm của học viên
+        endMs,
+        detail: {
+            initial: initialWrong,
+            final: finalWrong,
+            tone: toneWrong,
+            dp: dpIssue,
+            errorLevel, // 0 nếu không có lỗi
+            maxCleanLevel, // chỉ để chẩn đoán, không ảnh hưởng hiển thị
+            unknown: unknownPhoneErr || (syllErr && !initialWrong && !finalWrong && !toneWrong),
+        },
+    }
 }
 
 function parseIseXml(xmlString) {
@@ -166,6 +342,10 @@ function parseIseXml(xmlString) {
                     pinyin: w.symbol || '',
                     issue: cls.issue,
                     ok: cls.ok,
+                    level: cls.level,
+                    begMs: cls.begMs,
+                    endMs: cls.endMs,
+                    detail: cls.detail,
                 })
             })
         })
@@ -210,7 +390,7 @@ function runIse(pcmBuffer, text, onResult, onError) {
         }
         ws.send(JSON.stringify({ common: { app_id: APPID }, business, data: { status: 0 } }))
 
-        const FRAME = 1280
+        const FRAME = AUDIO_FRAME_BYTES
         let offset = 0
         let firstAudio = true
         const timer = setInterval(() => {
@@ -221,6 +401,11 @@ function runIse(pcmBuffer, text, onResult, onError) {
             const end = Math.min(offset + FRAME, pcmBuffer.length)
             const slice = pcmBuffer.slice(offset, end)
             const isLast = end >= pcmBuffer.length
+            // aus: 1 = frame đầu, 2 = frame giữa, 4 = frame cuối (theo tài liệu).
+            // Nếu audio ngắn tới mức chỉ có ĐÚNG MỘT frame thì nó vừa là đầu vừa
+            // là cuối; ta ưu tiên aus=1, còn tín hiệu kết thúc do data.status=2
+            // đảm nhiệm. Trên thực tế không xảy ra: một frame chỉ chứa 160ms
+            // audio, mà câu ngắn nhất cũng vài giây.
             ws.send(
                 JSON.stringify({
                     business: { cmd: 'auw', aus: firstAudio ? 1 : isLast ? 4 : 2 },
@@ -249,8 +434,12 @@ function runIse(pcmBuffer, text, onResult, onError) {
             xmlChunks += Buffer.from(msg.data.data, 'base64').toString('utf-8')
         }
         if (msg.data && msg.data.status === 2) {
+            dbg('XML ISE trả về:\n' + xmlChunks)
             try {
-                onResult(parseIseXml(xmlChunks))
+                // Trả kèm XML THÔ. Đây là nguồn sự thật duy nhất khi cần đối
+                // chứng "vì sao chữ này bị báo lỗi kiểu đó" — mọi kết luận về
+                // nhãn lỗi mà không có XML thô đều chỉ là suy đoán.
+                onResult({ ...parseIseXml(xmlChunks), rawXml: xmlChunks })
             } catch (e) {
                 onError('Không parse được XML ISE: ' + e.message)
             }
@@ -305,7 +494,7 @@ function runIat(pcmBuffer, onResult, onError) {
             })
         )
 
-        const FRAME = 1280
+        const FRAME = AUDIO_FRAME_BYTES
         let offset = 0
         const timer = setInterval(() => {
             if (ws.readyState !== WebSocket.OPEN) {
