@@ -280,7 +280,11 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                         // Nhận xét THEO TỪ (không đụng tới điểm số). Gom chữ
                         // thành từ dựa vào phiên âm câu mẫu để dập bớt lỗi báo
                         // oan ở âm tiết thanh nhẹ — xem lib/wordFeedback.js.
-                        const wordFeedback = buildWordFeedback(assessment.chars, context.pinyin)
+                        const wordFeedback = buildWordFeedback(
+                            assessment.chars,
+                            context.pinyin,
+                            referenceText
+                        )
 
                         sendJson({
                             type: 'result',
@@ -288,6 +292,10 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                             chars: assessment.chars,
                             spokenText,
                             words: wordFeedback.words,
+                            // Vùng ô chữ vốn là MỘT từ ghép nhưng bị phiên âm
+                            // tách rời (您 | 好 -> 您好). Học viên cần nghe cả từ
+                            // đọc liền, không chỉ từng chữ. Xem compoundWords.js.
+                            compounds: wordFeedback.compounds,
                             focusWord: wordFeedback.focusWord,
                             feedback: wordFeedback.feedback,
                             score,

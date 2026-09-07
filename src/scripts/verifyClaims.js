@@ -171,6 +171,66 @@ console.log('\n4. PHÂN TỪ CÓ ĐÚNG KHÔNG?\n')
 }
 
 // ---------------------------------------------------------------------------
+console.log('\n5. GHÉP LẠI TỪ BỊ PHIÊN ÂM TÁCH RỜI?\n')
+{
+    const { findCompounds } = require('../lib/compoundWords')
+    const mkWords = (arr) => arr.map((w) => ({ content: w, pinyin: '' }))
+    const found = (arr, text) =>
+        findCompounds(mkWords(arr), text)
+            .map((c) => c.content)
+            .join('|') || '(không gộp)'
+
+    check('您好 bị tách bởi "Nín hǎo"', found(['您', '好'], '您好！'), '您好', 'yêu cầu của khách')
+    check('你好 bị tách bởi "Nǐ hǎo"', found(['你', '好'], '你好！你叫什么名字？'), '你好')
+    check(
+        'Không gộp bừa cụm không phải từ',
+        found(['今天', '天气', '很', '好', '啊'], '今天天气很好啊'),
+        '(không gộp)',
+        '很好 không phải mục từ điển'
+    )
+    check(
+        'Không gộp xuyên qua dấu phẩy',
+        found(['大卫', '今天'], '大卫，今天天气怎么样？'),
+        '(không gộp)',
+        'hai bên dấu phẩy không liền nhau'
+    )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n6. ÉP CÁCH ĐỌC CHO TTS CÓ AN TOÀN KHÔNG?\n')
+{
+    // Đọc thẳng hàm trong gtc-fe để kiểm chứng ĐÚNG code đang chạy, thay vì
+    // chép lại logic ra đây rồi hai bản lệch nhau lúc nào không biết.
+    const fs = require('fs')
+    const path = require('path')
+    const speakPath = path.join(__dirname, '..', '..', '..', 'gtc-fe', 'src', 'lib', 'speak.js')
+
+    if (!fs.existsSync(speakPath)) {
+        console.log('  ‑  Bỏ qua: không tìm thấy gtc-fe/src/lib/speak.js\n')
+    } else {
+        const src = fs.readFileSync(speakPath, 'utf8')
+        const grab = (name) => {
+            const i = src.indexOf('function ' + name + '(')
+            return src.slice(i, src.indexOf('\n}', i) + 2)
+        }
+        // eslint-disable-next-line no-eval
+        const toSapiPhonemes = eval('(' + grab('toSapiPhonemes') + ')')
+        // eslint-disable-next-line no-eval
+        const countHanzi = eval('(' + grab('countHanzi') + ')')
+        const ph = (han, pinyin) => toSapiPhonemes(pinyin, countHanzi(han)) || '(không ép)'
+
+        check('你 biến điệu trong 你好', ph('你', 'ni2'), 'ni 2', 'nǐ -> ní')
+        check('不 trước thanh 4 (不热)', ph('不', 'bu2'), 'bu 2')
+        check('不 trước thanh 3 (不冷)', ph('不', 'bu4'), 'bu 4')
+        check('Cả từ ghép 你好', ph('你好', 'ni2 hao3'), 'ni 2 hao 3')
+        check('气 mang thanh 9', ph('气', 'qi9'), '(không ép)', '9 lúc là thanh nhẹ lúc là thanh 4')
+        check('服 thanh nhẹ (fu7)', ph('服', 'fu7'), '(không ép)', 'không đoán bừa')
+        check('Lệch số âm tiết so với số chữ', ph('你好', 'ni2'), '(không ép)', 'chốt chặn')
+        check('女 dùng ü', ph('女', 'nv3'), 'nv 3', 'Azure viết ü thành v')
+    }
+}
+
+// ---------------------------------------------------------------------------
 console.log('\n' + '─'.repeat(96))
 console.log(`  ĐẠT ${pass}  ·  LỆCH ${fail}`)
 if (fail > 0) {

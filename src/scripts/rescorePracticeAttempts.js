@@ -58,7 +58,7 @@ async function main() {
             score.score = spokenMatch.cap
         }
         // Dựng lại luôn phần nhận xét theo từ cho các bản ghi cũ (chưa có).
-        const wordFeedback = buildWordFeedback(attempt.chars || [], attempt.referencePinyin)
+        const wordFeedback = buildWordFeedback(attempt.chars || [], attempt.referencePinyin, attempt.referenceText)
 
         const oldScore = attempt.pronScore
         const newScore = score.score

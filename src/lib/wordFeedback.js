@@ -12,6 +12,7 @@
  */
 
 const { groupCharsIntoWords } = require('./wordSegmentation')
+const { findCompounds } = require('./compoundWords')
 
 // Mức độ nghiêm trọng của lỗi, quy về thang 100.
 //
@@ -236,12 +237,15 @@ function buildFeedback(words) {
 /**
  * chars: kết quả từng chữ đã được lib/iflytek.js diễn giải
  * referencePinyin: phiên âm câu mẫu lấy từ dữ liệu bài học
+ * referenceText: nguyên văn chữ Hán của câu mẫu (để dò từ ghép bị tách rời)
  *
- * Trả về { words, method, focusWord, feedback }
+ * Trả về { words, method, focusWord, feedback, compounds }
  *   focusWord — MỘT từ đáng luyện nhất, hoặc null nếu cả câu đều tốt.
  *   Cố ý chỉ nêu một: đưa cùng lúc năm chỗ cần sửa thì học viên không sửa chỗ nào.
+ *   compounds — các vùng ô chữ liền nhau vốn là MỘT từ ghép, để học viên nghe
+ *   được cả từ chứ không chỉ từng chữ rời. Xem compoundWords.js.
  */
-function buildWordFeedback(chars, referencePinyin) {
+function buildWordFeedback(chars, referencePinyin, referenceText) {
     const { groups, method } = groupCharsIntoWords(chars || [], referencePinyin)
     const words = groups.map(buildWord)
 
@@ -258,6 +262,7 @@ function buildWordFeedback(chars, referencePinyin) {
         method,
         focusWord: weakest || null,
         feedback: buildFeedback(words),
+        compounds: findCompounds(words, referenceText),
     }
 }
 
