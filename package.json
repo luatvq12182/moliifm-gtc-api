@@ -9,7 +9,8 @@
     "seed:admin": "node src/seed/seedAdmin.js",
     "rescore:practice": "node src/scripts/rescorePracticeAttempts.js",
     "dump:xml": "node src/scripts/dumpIseXml.js",
-    "verify": "node src/scripts/verifyClaims.js"
+    "verify": "node src/scripts/verifyClaims.js",
+    "migrate:video-content": "node src/scripts/migrateVideoContent.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

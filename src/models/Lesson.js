@@ -87,6 +87,24 @@ const videoSchema = new mongoose.Schema(
         youtubeId: { type: String, trim: true, default: '' },
         order: { type: Number, default: 0 },
         dialogue: { type: [dialogueLineSchema], default: [] },
+
+        // NỘI DUNG RIÊNG CỦA VIDEO NÀY.
+        //
+        // Khách hàng soạn MỘT file docx cho MỖI video — lời thoại, từ vựng, câu
+        // hỏi đều thuộc về đúng video đó. Học viên xem video nào thì chỉ thấy
+        // nội dung của video ấy.
+        //
+        // VÌ SAO LỒNG VÀO VIDEO chứ không gắn nhãn videoIndex cho từng mục ở
+        // cấp bài học: gắn nhãn thì lúc giảng viên xoá hoặc đảo thứ tự video,
+        // mọi nhãn lệch đi một nấc và từ vựng của video 2 im lặng nhảy sang
+        // video 1. Lồng vào thì xoá video là nội dung đi theo, không thể lệch.
+        vocabulary: { type: [vocabularyItemSchema], default: [] },
+        exercises: {
+            multipleChoice: { type: [multipleChoiceQuestionSchema], default: [] },
+            trueFalse: { type: [trueFalseQuestionSchema], default: [] },
+            sentenceOrder: { type: [sentenceOrderQuestionSchema], default: [] },
+            shortAnswer: { type: [shortAnswerQuestionSchema], default: [] },
+        },
     },
     { _id: false }
 )
@@ -101,6 +119,18 @@ const lessonSchema = new mongoose.Schema(
         status: { type: String, enum: ['draft', 'published'], default: 'draft' },
 
         videos: { type: [videoSchema], default: [] },
+
+        // ----- CƠ CHẾ LÙI, KHÔNG SOẠN MỚI VÀO ĐÂY NỮA -----
+        // Hai trường dưới đây là chỗ ở CŨ của từ vựng và bài tập, hồi nội dung
+        // còn dùng chung cho cả bài. Nay nội dung thuộc về từng video (xem
+        // videoSchema ở trên).
+        //
+        // Giữ lại để bài đã xuất bản không vỡ khi chưa chạy script chuyển đổi:
+        // video nào chưa có nội dung riêng thì giao diện lấy tạm ở đây. Chạy
+        // `npm run migrate:video-content` để dời hẳn vào video.
+        //
+        // Cùng cách xử lý như cặp `example`/`examples` của từ vựng — dữ liệu cũ
+        // vẫn đọc được, dữ liệu mới ghi vào chỗ mới.
         vocabulary: { type: [vocabularyItemSchema], default: [] },
 
         exercises: {
