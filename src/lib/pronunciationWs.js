@@ -25,6 +25,7 @@ const { savePracticeAudio, SAMPLE_RATE } = require('./audioStorage')
 const MAX_RAW_XML_CHARS = 256 * 1024
 const { computePronunciationScore } = require('./pronunciationScore')
 const { buildWordFeedback } = require('./wordFeedback')
+const { toSpeakableText } = require('./numericText')
 const { computeSpokenMatch } = require('./spokenTextMatch')
 const Student = require('../models/Student')
 const PracticeAttempt = require('../models/PracticeAttempt')
@@ -251,9 +252,28 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                         return
                     }
 
+                    // iFLYTEK từ chối câu mẫu KHÔNG CÓ CHỮ HÁN nào. Dòng thoại
+                    // là số điện thoại trần ("2038559800。") vì thế chết với mã
+                    // lỗi 8195 ở mọi lượt. Đổi sang số Hán theo phiên âm của
+                    // chính dòng đó — xem lib/numericText.js.
+                    const speakable = toSpeakableText(referenceText, context.pinyin)
+                    if (!speakable.text) {
+                        console.warn('[luyện nói] Câu mẫu không đọc được:', referenceText)
+                        sendJson({
+                            type: 'error',
+                            message: 'Câu này chưa chấm được vì không có chữ Hán. Báo giáo viên kiểm tra lại nội dung bài nhé.',
+                        })
+                        return
+                    }
+                    if (speakable.changed) {
+                        console.log(
+                            `[luyện nói] Câu mẫu "${referenceText}" -> "${speakable.text}" (theo ${speakable.source})`
+                        )
+                    }
+
                     scoring = true
                     try {
-                        const { assessment, spokenText } = await assessAndRecognize(pcm, referenceText)
+                        const { assessment, spokenText } = await assessAndRecognize(pcm, speakable.text)
 
                         const score = computePronunciationScore(assessment.summary)
 
@@ -305,9 +325,22 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                         // thao tác ghi đĩa.
                         await savePracticeHistory(pcm, assessment, spokenText, score, wordFeedback, spokenMatch)
                     } catch (err) {
+                        // KHÔNG ĐẨY LỖI THÔ CỦA iFLYTEK RA CHO HỌC VIÊN.
+                        // Trước đây chuỗi lỗi được chuyển thẳng, nên học viên
+                        // nhìn thấy nguyên "ise000760bb@gp1a0a04b08b214a4802
+                        // seeRec.SRecWrite error:iSEInputAppend error, ret=8195"
+                        // giữa màn hình luyện nói — vừa không hiểu gì, vừa
+                        // tưởng máy hỏng nặng. Mã lỗi là thứ CHÚNG TA cần để
+                        // chẩn đoán, nên đẩy vào log của máy chủ.
+                        const detail = typeof err === 'string' ? err : err?.message || String(err)
+                        console.error('[luyện nói] Chấm thất bại:', {
+                            referenceText,
+                            sentToIse: speakable.text,
+                            detail,
+                        })
                         sendJson({
                             type: 'error',
-                            message: typeof err === 'string' ? err : 'Lỗi khi chấm phát âm.',
+                            message: 'Chưa chấm được lần này. Bạn thử ghi âm lại nhé.',
                         })
                     } finally {
                         scoring = false
