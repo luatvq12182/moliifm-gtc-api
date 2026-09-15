@@ -14,6 +14,12 @@ const {
   getPracticeAttemptAudio,
   deleteStudentPracticeAttempts,
 } = require('../controllers/practiceAttemptController')
+const {
+  previewImport,
+  commitImport,
+  downloadTemplate,
+} = require('../controllers/studentImportController')
+const uploadSpreadsheet = require('../middleware/uploadSpreadsheet')
 const { protectAdmin } = require('../middleware/auth')
 
 const router = express.Router()
@@ -23,6 +29,12 @@ router.use(protectAdmin)
 
 router.get('/', getStudents)
 router.post('/', createStudent)
+
+// Nhập hàng loạt từ file Excel/CSV. Đặt TRƯỚC '/:id' vì Express khớp theo thứ
+// tự — để sau thì 'import' bị hiểu là một id học viên.
+router.get('/import/template', downloadTemplate)
+router.post('/import/preview', uploadSpreadsheet.single('file'), previewImport)
+router.post('/import/commit', uploadSpreadsheet.single('file'), commitImport)
 router.get('/:id', getStudent)
 router.put('/:id', updateStudent)
 router.patch('/:id/status', toggleStudentStatus)
