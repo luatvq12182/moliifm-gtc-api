@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken')
 const Admin = require('../models/Admin')
 const Student = require('../models/Student')
 const asyncHandler = require('../utils/asyncHandler')
+const { normalizePhone } = require('../lib/phone')
 
 function signToken(admin) {
   return jwt.sign({ id: admin._id, role: admin.role }, process.env.JWT_SECRET, {
@@ -64,18 +65,29 @@ const getMe = asyncHandler(async function getMe(req, res) {
 
 // POST /api/auth/student/login
 const studentLogin = asyncHandler(async function studentLogin(req, res) {
-  const { email, password } = req.body
+  const { phone, password } = req.body
 
-  if (!email || !password) {
+  if (!phone || !password) {
     res.status(400)
-    throw new Error('Vui lòng nhập email và mật khẩu.')
+    throw new Error('Vui lòng nhập số điện thoại và mật khẩu.')
   }
 
-  const student = await Student.findOne({ email: email.toLowerCase().trim() }).select('+password')
+  // Chuẩn hoá trước khi tra: học viên gõ "090 123 4567" hay "+84901234567"
+  // đều phải tìm ra cùng một tài khoản đã lưu dạng "0901234567".
+  const normalized = normalizePhone(phone)
+  if (!normalized) {
+    res.status(400)
+    throw new Error('Số điện thoại không hợp lệ.')
+  }
 
+  const student = await Student.findOne({ phone: normalized }).select('+password')
+
+  // CÙNG MỘT THÔNG BÁO cho "không có tài khoản" và "sai mật khẩu". Tách ra thì
+  // kẻ dò sẽ biết số nào có tài khoản trong hệ thống — mà số điện thoại thì dễ
+  // đoán hơn email nhiều.
   if (!student) {
     res.status(401)
-    throw new Error('Email hoặc mật khẩu không đúng.')
+    throw new Error('Số điện thoại hoặc mật khẩu không đúng.')
   }
 
   if (student.status === 'locked') {
@@ -86,7 +98,7 @@ const studentLogin = asyncHandler(async function studentLogin(req, res) {
   const isMatch = await student.comparePassword(password)
   if (!isMatch) {
     res.status(401)
-    throw new Error('Email hoặc mật khẩu không đúng.')
+    throw new Error('Số điện thoại hoặc mật khẩu không đúng.')
   }
 
   // ===== Kiểm tra giới hạn thiết bị (1 desktop + 1 mobile) =====

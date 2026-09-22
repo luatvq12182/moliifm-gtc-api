@@ -1,6 +1,7 @@
 const asyncHandler = require('../utils/asyncHandler')
 const Student = require('../models/Student')
 const generateTempPassword = require('../utils/generatePassword')
+const { normalizePhone } = require('../lib/phone')
 const {
     parseStudentFile,
     validateRows,
@@ -55,13 +56,21 @@ async function readAndValidate(file) {
         throw err
     }
 
-    // Chỉ hỏi cơ sở dữ liệu đúng những email có trong file, thay vì tải toàn bộ
-    // học viên về — khách có hàng nghìn tài khoản.
+    // Chỉ hỏi cơ sở dữ liệu đúng những số/email có trong file, thay vì tải
+    // toàn bộ học viên về — khách có hàng nghìn tài khoản.
+    const phones = rows.map((r) => normalizePhone(r.phone)).filter(Boolean)
     const emails = rows.map((r) => r.email.toLowerCase().trim()).filter(Boolean)
-    const existing = await Student.find({ email: { $in: emails } }).select('email').lean()
-    const existingEmails = new Set(existing.map((s) => s.email))
+    const found = await Student.find({
+        $or: [{ phone: { $in: phones } }, { email: { $in: emails } }],
+    })
+        .select('phone email')
+        .lean()
+    const existing = {
+        phones: new Set(found.map((s) => s.phone)),
+        emails: new Set(found.map((s) => s.email).filter(Boolean)),
+    }
 
-    return { ...validateRows(rows, existingEmails), headerRow, fileName: file.originalname }
+    return { ...validateRows(rows, existing), headerRow, fileName: file.originalname }
 }
 
 // POST /api/students/import/preview
@@ -102,8 +111,8 @@ const commitImport = asyncHandler(async function commitImport(req, res) {
             try {
                 await Student.create({
                     name: row.name,
-                    email: row.email,
                     phone: row.phone,
+                    email: row.email, // '' -> setter trong model đổi thành undefined
                     password,
                 })
                 created.push({ ...row, password })
@@ -117,7 +126,7 @@ const commitImport = asyncHandler(async function commitImport(req, res) {
                     email: row.email,
                     reason:
                         err.code === 11000
-                            ? 'Email vừa được tạo bởi thao tác khác'
+                            ? 'Số điện thoại hoặc email vừa được tạo bởi thao tác khác'
                             : 'Lỗi khi tạo tài khoản: ' + err.message,
                 })
             }

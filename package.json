@@ -10,7 +10,8 @@
     "rescore:practice": "node src/scripts/rescorePracticeAttempts.js",
     "dump:xml": "node src/scripts/dumpIseXml.js",
     "verify": "node src/scripts/verifyClaims.js",
-    "migrate:video-content": "node src/scripts/migrateVideoContent.js"
+    "migrate:video-content": "node src/scripts/migrateVideoContent.js",
+    "migrate:phone-login": "node src/scripts/migratePhoneLogin.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

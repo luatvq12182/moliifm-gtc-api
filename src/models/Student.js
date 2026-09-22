@@ -1,5 +1,6 @@
 const mongoose = require('mongoose')
 const bcrypt = require('bcryptjs')
+const { normalizePhone } = require('../lib/phone')
 
 const studentSchema = new mongoose.Schema(
   {
@@ -8,17 +9,43 @@ const studentSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      lowercase: true,
-      trim: true,
-    },
+    // SỐ ĐIỆN THOẠI LÀ ĐỊNH DANH ĐĂNG NHẬP.
+    //
+    // Khách hàng đổi từ email sang số điện thoại vì học viên gần như ai cũng có
+    // số, còn email thì không. Luôn lưu ở dạng chuẩn "0xxxxxxxxx" (xem
+    // lib/phone.js) — setter dưới đây đảm bảo điều đó ở mọi đường ghi, kể cả
+    // script hay ai đó gọi Student.create trực tiếp mà quên chuẩn hoá.
     phone: {
       type: String,
+      required: [true, 'Thiếu số điện thoại.'],
+      unique: true,
       trim: true,
-      default: '',
+      set: (v) => normalizePhone(v) || v, // giữ nguyên giá trị rác để validator báo lỗi rõ
+      validate: {
+        validator: (v) => normalizePhone(v) === v && v !== '',
+        message: 'Số điện thoại không hợp lệ.',
+      },
+    },
+    // Email nay là TUỲ CHỌN.
+    //
+    // Hai bẫy về chỉ mục duy nhất khi một trường trở thành tuỳ chọn:
+    //
+    //  1. Chỉ mục unique thường coi "không có trường" là giá trị null, và hai
+    //     bản ghi cùng null là TRÙNG. Học viên thứ hai không có email sẽ nổ
+    //     lỗi duplicate key. Phải dùng `sparse` để chỉ mục bỏ qua bản ghi
+    //     không có trường này.
+    //
+    //  2. `sparse` chỉ bỏ qua khi trường VẮNG MẶT hoặc null — KHÔNG bỏ qua
+    //     chuỗi rỗng "". Nếu lưu email = "" cho học viên không có email thì
+    //     sparse vô tác dụng. Setter dưới đây đổi "" thành undefined để Mongoose
+    //     không ghi trường đó xuống.
+    email: {
+      type: String,
+      unique: true,
+      sparse: true,
+      lowercase: true,
+      trim: true,
+      set: (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
     },
     password: {
       type: String,

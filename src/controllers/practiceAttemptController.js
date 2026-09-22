@@ -18,7 +18,7 @@ function ensureEnabled(res) {
 const getStudentPracticeAttempts = asyncHandler(async function getStudentPracticeAttempts(req, res) {
     ensureEnabled(res)
 
-    const student = await Student.findById(req.params.id).select('name email')
+    const student = await Student.findById(req.params.id).select('name phone email')
     if (!student) {
         res.status(404)
         throw new Error('Không tìm thấy học viên.')
@@ -49,7 +49,7 @@ const getStudentPracticeAttempts = asyncHandler(async function getStudentPractic
 
     res.json({
         data,
-        student: { _id: student._id, name: student.name, email: student.email },
+        student: { _id: student._id, name: student.name, phone: student.phone, email: student.email },
         pagination: {
             total,
             page: pageNum,

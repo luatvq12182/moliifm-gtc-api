@@ -11,6 +11,7 @@
 
 const { Readable } = require('stream')
 const ExcelJS = require('exceljs')
+const { normalizePhone } = require('./phone')
 
 // Trần số dòng mỗi lần nhập.
 //
@@ -68,7 +69,7 @@ function cellText(cell) {
 
 /**
  * Đọc file thành danh sách dòng thô.
- * Trả về { rows, headerRow } — rows là [{ rowNumber, name, email, phone }]
+ * Trả về { rows, headerRow } — rows là [{ rowNumber, name, phone, email }]
  */
 async function parseStudentFile(buffer, filename) {
     const workbook = new ExcelJS.Workbook()
@@ -99,7 +100,9 @@ async function parseStudentFile(buffer, filename) {
                 if (aliases.includes(key) && map[field] === undefined) map[field] = col
             }
         })
-        if (map.email !== undefined) {
+        // Hàng tiêu đề = hàng đầu tiên nhận ra được cột Số điện thoại — đó là
+        // định danh đăng nhập nên bắt buộc phải có.
+        if (map.phone !== undefined) {
             headerRow = r
             colIndex = map
             break
@@ -108,7 +111,7 @@ async function parseStudentFile(buffer, filename) {
 
     if (!headerRow) {
         throw new Error(
-            'Không tìm thấy cột Email trong file. Hãy tải file mẫu và điền theo đúng tên cột.'
+            'Không tìm thấy cột Số điện thoại trong file. Hãy tải file mẫu và điền theo đúng tên cột.'
         )
     }
     if (colIndex.name === undefined) {
@@ -137,48 +140,68 @@ async function parseStudentFile(buffer, filename) {
 /**
  * Soát danh sách dòng.
  *
- * existingEmails: Set các email đã có tài khoản (đã hạ chữ thường).
+ * existing: { phones: Set, emails: Set } — đã có tài khoản (đã chuẩn hoá).
  *
  * Trả về { ready, problems, summary }
  *   ready    — các dòng tạo được, đã chuẩn hoá
- *   problems — [{ rowNumber, name, email, reason }]
+ *   problems — [{ rowNumber, name, phone, email, reason }]
+ *
+ * SỐ ĐIỆN THOẠI LÀ ĐỊNH DANH: bắt buộc, phải hợp lệ, không trùng trong file,
+ * không trùng tài khoản đã có. Email chỉ là thông tin thêm — có thì kiểm định
+ * dạng và chống trùng, không có thì thôi.
  */
-function validateRows(rows, existingEmails) {
+function validateRows(rows, existing) {
     const ready = []
     const problems = []
-    const seenInFile = new Map() // email -> rowNumber đầu tiên
+    const seenPhones = new Map() // phone chuẩn -> rowNumber đầu tiên
+    const seenEmails = new Map()
 
     for (const row of rows) {
         const name = row.name.replace(/\s+/g, ' ').trim()
+        const phone = normalizePhone(row.phone)
         const email = row.email.toLowerCase().trim()
-        // Số điện thoại hay bị Excel tự thêm khoảng trắng/dấu chấm khi định dạng.
-        const phone = row.phone.replace(/[\s.]/g, '').trim()
 
-        const fail = (reason) => problems.push({ rowNumber: row.rowNumber, name, email, reason })
+        const fail = (reason) =>
+            problems.push({ rowNumber: row.rowNumber, name, phone: phone || row.phone.trim(), email, reason })
 
         if (!name) {
             fail('Thiếu họ tên')
             continue
         }
-        if (!email) {
-            fail('Thiếu email')
+        if (!row.phone.trim()) {
+            fail('Thiếu số điện thoại')
             continue
         }
-        if (!EMAIL_RE.test(email)) {
-            fail('Email không hợp lệ')
+        if (!phone) {
+            fail('Số điện thoại không hợp lệ')
             continue
         }
-        if (seenInFile.has(email)) {
-            fail(`Email trùng với dòng ${seenInFile.get(email)} trong cùng file`)
+        if (seenPhones.has(phone)) {
+            fail(`Số điện thoại trùng với dòng ${seenPhones.get(phone)} trong cùng file`)
             continue
         }
-        if (existingEmails.has(email)) {
-            fail('Email đã có tài khoản — bỏ qua, không ghi đè')
+        if (existing.phones.has(phone)) {
+            fail('Số điện thoại đã có tài khoản — bỏ qua, không ghi đè')
             continue
+        }
+        if (email) {
+            if (!EMAIL_RE.test(email)) {
+                fail('Email không hợp lệ')
+                continue
+            }
+            if (seenEmails.has(email)) {
+                fail(`Email trùng với dòng ${seenEmails.get(email)} trong cùng file`)
+                continue
+            }
+            if (existing.emails.has(email)) {
+                fail('Email đã được dùng bởi học viên khác')
+                continue
+            }
+            seenEmails.set(email, row.rowNumber)
         }
 
-        seenInFile.set(email, row.rowNumber)
-        ready.push({ rowNumber: row.rowNumber, name, email, phone })
+        seenPhones.set(phone, row.rowNumber)
+        ready.push({ rowNumber: row.rowNumber, name, phone, email })
     }
 
     return {
@@ -192,10 +215,12 @@ function validateRows(rows, existingEmails) {
     }
 }
 
+// Số điện thoại đứng trước Email: nó là thứ học viên dùng để đăng nhập, còn
+// email chỉ là thông tin thêm và có thể trống.
 const RESULT_COLUMNS = [
     { header: 'Họ tên', key: 'name', width: 26 },
-    { header: 'Email', key: 'email', width: 32 },
     { header: 'Số điện thoại', key: 'phone', width: 18 },
+    { header: 'Email', key: 'email', width: 32 },
     { header: 'Mật khẩu', key: 'password', width: 16 },
 ]
 
@@ -230,9 +255,11 @@ async function buildResultWorkbook(created, problems = []) {
         skipped.columns = [
             { header: 'Dòng trong file', key: 'rowNumber', width: 16 },
             { header: 'Họ tên', key: 'name', width: 26 },
+            { header: 'Số điện thoại', key: 'phone', width: 18 },
             { header: 'Email', key: 'email', width: 32 },
             { header: 'Lý do', key: 'reason', width: 44 },
         ]
+        skipped.getColumn('phone').numFmt = '@'
         problems.forEach((p) => skipped.addRow(p))
         styleHeader(skipped)
     }
@@ -245,8 +272,10 @@ async function buildTemplateWorkbook() {
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet('Danh sách học viên')
     sheet.columns = RESULT_COLUMNS.filter((c) => c.key !== 'password')
-    sheet.addRow({ name: 'Nguyễn Văn An', email: 'an.nguyen@example.com', phone: '0901234567' })
-    sheet.addRow({ name: 'Trần Thị Bình', email: 'binh.tran@example.com', phone: '0909876543' })
+    // Dòng mẫu thứ hai cố ý KHÔNG có email, để người điền thấy rõ cột đó bỏ
+    // trống được.
+    sheet.addRow({ name: 'Nguyễn Văn An', phone: '0901234567', email: 'an.nguyen@example.com' })
+    sheet.addRow({ name: 'Trần Thị Bình', phone: '0909876543', email: '' })
     styleHeader(sheet)
     sheet.getColumn('phone').numFmt = '@'
     return workbook.xlsx.writeBuffer()

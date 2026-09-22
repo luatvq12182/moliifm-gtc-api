@@ -1,6 +1,7 @@
 const Student = require('../models/Student')
 const asyncHandler = require('../utils/asyncHandler')
 const generateTempPassword = require('../utils/generatePassword')
+const { normalizePhone } = require('../lib/phone')
 
 // GET /api/students?search=&status=&page=&limit=
 const getStudents = asyncHandler(async function getStudents(req, res) {
@@ -9,10 +10,14 @@ const getStudents = asyncHandler(async function getStudents(req, res) {
   const query = {}
 
   if (search) {
-    // Tìm theo tên hoặc email, không phân biệt hoa thường
+    // Tìm theo tên, số điện thoại hoặc email, không phân biệt hoa thường.
+    // Số điện thoại tra theo dạng đã chuẩn hoá: admin gõ "090 123" vẫn ra
+    // học viên lưu "0901234567".
+    const digits = search.replace(/\D/g, '')
     query.$or = [
       { name: { $regex: search, $options: 'i' } },
       { email: { $regex: search, $options: 'i' } },
+      ...(digits ? [{ phone: { $regex: digits } }] : []),
     ]
   }
 
@@ -56,15 +61,31 @@ const getStudent = asyncHandler(async function getStudent(req, res) {
 const createStudent = asyncHandler(async function createStudent(req, res) {
   const { name, email, phone, course } = req.body
 
-  if (!name || !email) {
+  if (!name || !phone) {
     res.status(400)
-    throw new Error('Vui lòng nhập đầy đủ tên và email học viên.')
+    throw new Error('Vui lòng nhập đầy đủ tên và số điện thoại học viên.')
   }
 
-  const existing = await Student.findOne({ email: email.toLowerCase().trim() })
+  const normalizedPhone = normalizePhone(phone)
+  if (!normalizedPhone) {
+    res.status(400)
+    throw new Error('Số điện thoại không hợp lệ.')
+  }
+
+  const existing = await Student.findOne({ phone: normalizedPhone })
   if (existing) {
     res.status(409)
-    throw new Error('Email này đã được đăng ký cho một học viên khác.')
+    throw new Error('Số điện thoại này đã được đăng ký cho một học viên khác.')
+  }
+
+  // Email nay tuỳ chọn, nhưng có thì vẫn không được trùng.
+  const cleanEmail = typeof email === 'string' ? email.toLowerCase().trim() : ''
+  if (cleanEmail) {
+    const emailTaken = await Student.findOne({ email: cleanEmail })
+    if (emailTaken) {
+      res.status(409)
+      throw new Error('Email này đã được dùng bởi học viên khác.')
+    }
   }
 
   // Admin tạo tài khoản hộ học viên nên chưa có mật khẩu — sinh mật khẩu tạm,
@@ -74,8 +95,8 @@ const createStudent = asyncHandler(async function createStudent(req, res) {
 
   const student = await Student.create({
     name,
-    email,
-    phone,
+    phone: normalizedPhone,
+    email: cleanEmail, // '' -> setter trong model đổi thành undefined
     course,
     password: tempPassword,
   })
@@ -99,20 +120,53 @@ const updateStudent = asyncHandler(async function updateStudent(req, res) {
     throw new Error('Không tìm thấy học viên.')
   }
 
-  if (email && email.toLowerCase().trim() !== student.email) {
-    const emailTaken = await Student.findOne({ email: email.toLowerCase().trim() })
-    if (emailTaken) {
-      res.status(409)
-      throw new Error('Email này đã được dùng bởi học viên khác.')
+  if (phone !== undefined) {
+    const normalizedPhone = normalizePhone(phone)
+    if (!normalizedPhone) {
+      res.status(400)
+      throw new Error('Số điện thoại không hợp lệ.')
     }
-    student.email = email
+    if (normalizedPhone !== student.phone) {
+      const phoneTaken = await Student.findOne({ phone: normalizedPhone })
+      if (phoneTaken) {
+        res.status(409)
+        throw new Error('Số điện thoại này đã được dùng bởi học viên khác.')
+      }
+      student.phone = normalizedPhone
+    }
+  }
+
+  if (email !== undefined) {
+    const cleanEmail = typeof email === 'string' ? email.toLowerCase().trim() : ''
+    if (cleanEmail && cleanEmail !== student.email) {
+      const emailTaken = await Student.findOne({ email: cleanEmail })
+      if (emailTaken) {
+        res.status(409)
+        throw new Error('Email này đã được dùng bởi học viên khác.')
+      }
+    }
+    // Xoá email (gửi lên chuỗi rỗng) cũng là một cập nhật hợp lệ.
+    student.email = cleanEmail
   }
 
   if (name !== undefined) student.name = name
-  if (phone !== undefined) student.phone = phone
   if (course !== undefined) student.course = course
 
-  await student.save()
+  try {
+    await student.save()
+  } catch (err) {
+    // Học viên tạo từ trước khi đổi sang đăng nhập bằng số có thể đang mang
+    // số không hợp lệ (dữ liệu thử "1900 8198" chẳng hạn). save() kiểm cả bản
+    // ghi nên admin chỉ đổi TÊN cũng bị chặn — báo đúng việc cần làm thay vì
+    // một câu "số không hợp lệ" khiến họ tưởng mình vừa gõ sai.
+    if (err.name === 'ValidationError' && err.errors?.phone && phone === undefined) {
+      res.status(400)
+      throw new Error(
+        `Số điện thoại đang lưu ("${student.phone}") không hợp lệ. Hãy sửa số điện thoại trước rồi cập nhật thông tin khác.`
+      )
+    }
+    throw err
+  }
 
   res.json(student)
 })
