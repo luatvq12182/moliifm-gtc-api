@@ -19,6 +19,11 @@ const studentSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Thiếu số điện thoại.'],
       unique: true,
+      // sparse: học viên tạo TRƯỚC khi đổi sang đăng nhập bằng số có thể chưa
+      // có số. Chỉ mục unique thường coi mọi bản ghi vắng trường là cùng một
+      // giá trị null và từ chối tạo. sparse bỏ qua chúng. `required` ở trên
+      // vẫn chặn tạo mới không số — sparse chỉ tha cho dữ liệu cũ.
+      sparse: true,
       trim: true,
       set: (v) => normalizePhone(v) || v, // giữ nguyên giá trị rác để validator báo lỗi rõ
       validate: {

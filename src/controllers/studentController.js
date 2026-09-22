@@ -3,6 +3,18 @@ const asyncHandler = require('../utils/asyncHandler')
 const generateTempPassword = require('../utils/generatePassword')
 const { normalizePhone } = require('../lib/phone')
 
+// Vô hiệu hoá các ký tự đặc biệt của regex trong chuỗi người dùng gõ.
+//
+// Hai lý do, đều đã đo được:
+//  - SAI KẾT QUẢ: gõ "0909.876" thì dấu chấm là "ký tự bất kỳ", nên "0909X876"
+//    cũng khớp.
+//  - TREO MÁY CHỦ: gõ "(a+)+$" rồi để MongoDB chạy trên chuỗi vài chục ký tự
+//    là regex bùng nổ — thử ở Node mất 10 giây cho 28 ký tự. Đây là đầu vào
+//    của người dùng, không được đưa thẳng vào regex.
+function escapeRegex(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 // GET /api/students?search=&status=&page=&limit=
 const getStudents = asyncHandler(async function getStudents(req, res) {
   const { search = '', status, page = 1, limit = 20 } = req.query
@@ -13,10 +25,11 @@ const getStudents = asyncHandler(async function getStudents(req, res) {
     // Tìm theo tên, số điện thoại hoặc email, không phân biệt hoa thường.
     // Số điện thoại tra theo dạng đã chuẩn hoá: admin gõ "090 123" vẫn ra
     // học viên lưu "0901234567".
+    const safe = escapeRegex(search.trim())
     const digits = search.replace(/\D/g, '')
     query.$or = [
-      { name: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } },
+      { name: { $regex: safe, $options: 'i' } },
+      { email: { $regex: safe, $options: 'i' } },
       ...(digits ? [{ phone: { $regex: digits } }] : []),
     ]
   }
