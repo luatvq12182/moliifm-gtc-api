@@ -33,6 +33,11 @@ function errorHandler(err, req, res, next) {
 
   res.status(statusCode).json({
     message,
+    // Mã do CHÍNH ỨNG DỤNG gắn (vd. ACCOUNT_LOCKED), để giao diện xử lý theo
+    // tình huống mà không phải so khớp câu chữ tiếng Việt. Khác với err.code
+    // của Mongo/multer ở trên — những mã đó đã được diễn giải thành message
+    // rồi, không đẩy ra ngoài.
+    code: err.appCode,
     stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
   })
 }

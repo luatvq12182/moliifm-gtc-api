@@ -58,8 +58,16 @@ const protectStudent = asyncHandler(async function protectStudent(req, res, next
   }
 
   if (student.status === 'locked') {
+    // GẮN MÃ, KHÔNG ĐỂ GIAO DIỆN ĐOÁN THEO CHUỖI TIẾNG VIỆT.
+    //
+    // Có ba chỗ trả 403 cho học viên và chỉ MỘT chỗ nghĩa là tài khoản bị khoá;
+    // hai chỗ kia là lỗi lúc đăng nhập (sai thiết bị). Giao diện phải đăng xuất
+    // ở ca này và KHÔNG được đăng xuất ở hai ca kia — phân biệt bằng mã thì
+    // chắc chắn, còn so chuỗi thì hỏng ngay lần đầu ai đó sửa lại câu chữ.
     res.status(403)
-    throw new Error('Tài khoản của bạn đã bị khóa. Vui lòng liên hệ trung tâm để được hỗ trợ.')
+    const err = new Error('Tài khoản của bạn đã bị khóa. Vui lòng liên hệ trung tâm để được hỗ trợ.')
+    err.appCode = 'ACCOUNT_LOCKED'
+    throw err
   }
 
   req.student = student
