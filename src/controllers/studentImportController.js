@@ -1,6 +1,5 @@
 const asyncHandler = require('../utils/asyncHandler')
 const Student = require('../models/Student')
-const generateTempPassword = require('../utils/generatePassword')
 const { normalizePhone } = require('../lib/phone')
 const {
     parseStudentFile,
@@ -107,7 +106,11 @@ const commitImport = asyncHandler(async function commitImport(req, res) {
         const chunk = ready.slice(i, i + CHUNK_SIZE)
 
         for (const row of chunk) {
-            const password = generateTempPassword()
+            // Mật khẩu ban đầu = số điện thoại, giống hệt lúc tạo lẻ từng học
+            // viên (xem studentController.createStudent). Hai đường tạo tài
+            // khoản phải cho ra cùng một kết quả, nếu không giáo viên nhập
+            // bằng file sẽ phải dặn học viên một kiểu khác.
+            const password = row.phone
             try {
                 await Student.create({
                     name: row.name,

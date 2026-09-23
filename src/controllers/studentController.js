@@ -101,10 +101,18 @@ const createStudent = asyncHandler(async function createStudent(req, res) {
     }
   }
 
-  // Admin tạo tài khoản hộ học viên nên chưa có mật khẩu — sinh mật khẩu tạm,
-  // trả về 1 lần duy nhất trong response để admin copy gửi cho học viên
-  // (hệ thống không lưu lại mật khẩu dạng plain text sau bước này).
-  const tempPassword = generateTempPassword()
+  // MẬT KHẨU BAN ĐẦU = SỐ ĐIỆN THOẠI.
+  //
+  // Yêu cầu của khách: giáo viên khỏi phải đọc mật khẩu ngẫu nhiên qua điện
+  // thoại cho từng học viên, chỉ cần nói "đăng nhập bằng số điện thoại của em".
+  //
+  // ĐÁNH ĐỔI ĐÃ BIẾT VÀ ĐÃ CHẤP NHẬN: số điện thoại nằm trong bảng quản trị,
+  // trong file nhập liệu, và bạn cùng lớp thường biết của nhau — nên ai cầm
+  // danh sách lớp là đăng nhập được vào tài khoản bất kỳ chưa đổi mật khẩu.
+  // Khách đã chọn KHÔNG bắt đổi ở lần đăng nhập đầu, chỉ để sẵn màn hình đổi
+  // trong menu. Muốn siết lại thì thêm cờ "phải đổi mật khẩu" vào model rồi
+  // chặn ở ProtectedStudentRoute.
+  const tempPassword = normalizedPhone
 
   const student = await Student.create({
     name,
@@ -212,6 +220,53 @@ const deleteStudent = asyncHandler(async function deleteStudent(req, res) {
 })
 
 // PATCH /api/students/:id/reset-password — admin cấp lại mật khẩu tạm mới
+// PATCH /api/auth/student/change-password — HỌC VIÊN tự đổi mật khẩu của mình.
+//
+// Khác resetStudentPassword bên dưới (admin đặt lại hộ): ở đây phải biết mật
+// khẩu hiện tại mới đổi được. Không có bước đó thì ai mượn được máy đang mở
+// sẵn là đổi mật khẩu chiếm luôn tài khoản.
+const MIN_PASSWORD_LENGTH = 6
+
+const changeOwnPassword = asyncHandler(async function changeOwnPassword(req, res) {
+  const { currentPassword, newPassword } = req.body
+
+  if (!currentPassword || !newPassword) {
+    res.status(400)
+    throw new Error('Vui lòng nhập mật khẩu hiện tại và mật khẩu mới.')
+  }
+  if (String(newPassword).length < MIN_PASSWORD_LENGTH) {
+    res.status(400)
+    throw new Error(`Mật khẩu mới phải có ít nhất ${MIN_PASSWORD_LENGTH} ký tự.`)
+  }
+  if (newPassword === currentPassword) {
+    res.status(400)
+    throw new Error('Mật khẩu mới phải khác mật khẩu hiện tại.')
+  }
+
+  // req.student do protectStudent gắn vào, nhưng nó KHÔNG kèm password (model
+  // để select: false) — phải nạp lại kèm trường đó mới so sánh được.
+  const student = await Student.findById(req.student._id).select('+password')
+  if (!student) {
+    res.status(404)
+    throw new Error('Không tìm thấy tài khoản.')
+  }
+
+  const isMatch = await student.comparePassword(currentPassword)
+  if (!isMatch) {
+    res.status(401)
+    throw new Error('Mật khẩu hiện tại không đúng.')
+  }
+
+  student.password = newPassword // pre('save') trong model tự băm lại
+  await student.save()
+
+  // KHÔNG cấp token mới và cũng không thu hồi token cũ: hệ thống dùng JWT nên
+  // không có danh sách phiên để xoá. Token đang cầm vẫn dùng được tới khi hết
+  // hạn — đó là hành vi có chủ đích, để học viên không bị đá ra ngay sau khi
+  // vừa đổi mật khẩu thành công.
+  res.json({ message: 'Đã đổi mật khẩu thành công.' })
+})
+
 const resetStudentPassword = asyncHandler(async function resetStudentPassword(req, res) {
   const student = await Student.findById(req.params.id)
   if (!student) {
@@ -262,4 +317,5 @@ module.exports = {
   deleteStudent,
   resetStudentPassword,
   resetStudentDevices,
+  changeOwnPassword,
 }

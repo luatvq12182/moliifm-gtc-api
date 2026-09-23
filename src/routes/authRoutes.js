@@ -1,5 +1,6 @@
 const express = require('express')
 const { login, getMe, studentLogin, getStudentMe } = require('../controllers/authController')
+const { changeOwnPassword } = require('../controllers/studentController')
 const { protectAdmin, protectStudent } = require('../middleware/auth')
 
 const router = express.Router()
@@ -9,5 +10,6 @@ router.get('/me', protectAdmin, getMe)
 
 router.post('/student/login', studentLogin)
 router.get('/student/me', protectStudent, getStudentMe)
+router.patch('/student/change-password', protectStudent, changeOwnPassword)
 
 module.exports = router
