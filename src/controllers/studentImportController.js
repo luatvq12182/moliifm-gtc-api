@@ -20,6 +20,28 @@ const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.s
 // TRÌNH — còn kịp xen vào.
 const CHUNK_SIZE = 20
 
+/**
+ * Diễn giải lỗi lúc tạo tài khoản thành câu giáo viên đọc hiểu được.
+ *
+ * Trước đây mọi lỗi trùng khoá đều báo "vừa được tạo bởi thao tác khác" — đúng
+ * với ca hiếm (hai người nhập cùng lúc) nhưng SAI với ca hay gặp thật: cơ sở
+ * dữ liệu chưa chạy migration nên chỉ mục email vẫn coi mọi học viên KHÔNG có
+ * email là trùng nhau. Câu đó khiến người đọc đi tìm nhầm hướng — file mẫu
+ * không hề có email trùng nào.
+ */
+function describeCreateError(err, row) {
+    if (err.code !== 11000) return 'Lỗi khi tạo tài khoản: ' + err.message
+
+    const field = Object.keys(err.keyPattern || {})[0]
+
+    if (field === 'email' && !row.email) {
+        return 'Cơ sở dữ liệu chưa cho phép nhiều học viên bỏ trống email — báo kỹ thuật chạy migration'
+    }
+    if (field === 'email') return `Email "${row.email}" đã có tài khoản khác dùng`
+    if (field === 'phone') return `Số điện thoại "${row.phone}" vừa được tạo bởi thao tác khác`
+    return 'Trùng dữ liệu đã có trong hệ thống'
+}
+
 function sendWorkbook(res, buffer, filename) {
     res.setHeader('Content-Type', XLSX_MIME)
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
@@ -120,17 +142,17 @@ const commitImport = asyncHandler(async function commitImport(req, res) {
                 })
                 created.push({ ...row, password })
             } catch (err) {
-                // Một dòng hỏng KHÔNG được làm đổ cả lô. Hay gặp nhất là đụng
-                // ràng buộc email duy nhất do có người tạo xen vào giữa chừng.
-                console.error('[nhập học viên] Lỗi dòng', row.rowNumber, row.email, err.message)
+                // Một dòng hỏng KHÔNG được làm đổ cả lô.
+                console.error('[nhập học viên] Lỗi dòng', row.rowNumber, row.phone, err.message)
                 failed.push({
                     rowNumber: row.rowNumber,
                     name: row.name,
+                    // THIẾU phone Ở ĐÂY LÀ MỘT LỖI CŨ: cột "Số điện thoại" trong
+                    // sheet "Dòng bị bỏ qua" bỏ trống ở mọi dòng hỏng lúc tạo,
+                    // nên giáo viên không biết dòng nào ứng với học viên nào.
+                    phone: row.phone,
                     email: row.email,
-                    reason:
-                        err.code === 11000
-                            ? 'Số điện thoại hoặc email vừa được tạo bởi thao tác khác'
-                            : 'Lỗi khi tạo tài khoản: ' + err.message,
+                    reason: describeCreateError(err, row),
                 })
             }
         }

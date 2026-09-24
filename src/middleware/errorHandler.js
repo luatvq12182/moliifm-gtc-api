@@ -10,11 +10,29 @@ function errorHandler(err, req, res, next) {
     return
   }
 
-  // Lỗi trùng khóa unique (vd. email đã tồn tại)
+  // Lỗi trùng khóa unique (vd. số điện thoại đã tồn tại)
   if (err.code === 11000) {
     statusCode = 409
     const field = Object.keys(err.keyPattern || { field: 1 })[0]
-    message = `Giá trị "${field}" đã tồn tại trong hệ thống.`
+    const value = (err.keyValue || {})[field]
+
+    // GIÁ TRỊ RỖNG THÌ KHÔNG PHẢI "ĐÃ TỒN TẠI".
+    //
+    // Email là trường tuỳ chọn. Nếu chỉ mục chưa ở dạng sparse thì MongoDB coi
+    // mọi bản ghi KHÔNG có email là cùng một giá trị null và từ chối bản ghi
+    // thứ hai. Lúc đó câu 'Giá trị "email" đã tồn tại' hoàn toàn đánh lạc
+    // hướng — người dùng đang để trống email chứ có nhập gì đâu mà trùng.
+    if (value === null || value === undefined || value === '') {
+      message =
+        `Chưa lưu được vì cơ sở dữ liệu đang không cho phép nhiều học viên ` +
+        `bỏ trống "${field}". Vui lòng báo kỹ thuật chạy migration.`
+      console.error(
+        `[CẤU HÌNH] Chỉ mục "${field}" chưa ở dạng sparse — chạy: npm run migrate:phone-login -- --apply`
+      )
+    } else {
+      const label = field === 'phone' ? 'Số điện thoại' : field === 'email' ? 'Email' : field
+      message = `${label} "${value}" đã được dùng bởi tài khoản khác.`
+    }
   }
 
   // Lỗi validate của Mongoose (thiếu field required, sai enum...)
