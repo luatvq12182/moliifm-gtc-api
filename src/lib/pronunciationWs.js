@@ -123,6 +123,14 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
             }
             const found = await Student.findById(decoded.id)
             if (!found || found.status === 'locked') return null
+
+            // Máy khác đã chiếm chỗ thiết bị này -> từ chối, giống hệt
+            // protectStudent. WebSocket là ĐƯỜNG VÀO RIÊNG, không đi qua
+            // middleware HTTP, nên bỏ sót chỗ này là học viên bị đá khỏi mọi
+            // trang nhưng vẫn chấm phát âm được bình thường.
+            const slotId = found.devices?.[decoded.deviceType]?.deviceId || null
+            if (!decoded.deviceId || decoded.deviceId !== slotId) return null
+
             return found
         }
 

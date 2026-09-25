@@ -10,10 +10,22 @@ function signToken(admin) {
   })
 }
 
-function signStudentToken(student) {
-  return jwt.sign({ id: student._id, role: 'student' }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  })
+// TOKEN HỌC VIÊN MANG THEO deviceId.
+//
+// Đây là mấu chốt của cơ chế "máy mới đăng nhập thì máy cũ tự đăng xuất".
+// JWT ký xong là tự nó hợp lệ tới khi hết hạn — máy chủ không giữ danh sách
+// phiên nào để mà xoá, nên KHÔNG thu hồi được token của máy cũ.
+//
+// Cách làm ngược lại: bản ghi học viên là nguồn sự thật về "máy nào đang giữ
+// chỗ". Token mang deviceId, và protectStudent so nó với deviceId đang lưu ở
+// mỗi request. Máy mới đăng nhập ghi đè chỗ đó, token của máy cũ lập tức
+// không khớp nữa. Xem middleware/auth.js.
+function signStudentToken(student, deviceId, deviceType) {
+  return jwt.sign(
+    { id: student._id, role: 'student', deviceId, deviceType },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+  )
 }
 
 // POST /api/auth/login
@@ -108,30 +120,33 @@ const studentLogin = asyncHandler(async function studentLogin(req, res) {
     throw new Error('Thiếu thông tin thiết bị.')
   }
 
+  // MÁY MỚI CHIẾM CHỖ, MÁY CŨ TỰ BỊ ĐĂNG XUẤT.
+  //
+  // Trước đây máy đầu tiên giữ chỗ vĩnh viễn và máy thứ hai bị CHẶN, phải nhờ
+  // admin reset mới đổi được thiết bị. Khách phản hồi là bất tiện: học viên đổi
+  // điện thoại, xoá dữ liệu trình duyệt, hay chỉ đăng nhập ở máy khác là phải
+  // gọi lên trung tâm.
+  //
+  // Nay ghi đè thẳng. Vẫn giữ HAI chỗ riêng (1 điện thoại + 1 máy tính) để học
+  // viên học trên máy tính và tra từ trên điện thoại cùng lúc vẫn được — chỉ là
+  // trong mỗi chỗ thì máy mới nhất thắng.
+  //
+  // Token của máy cũ không bị xoá (không xoá được), nhưng nó mang deviceId cũ
+  // nên protectStudent sẽ từ chối ở request kế tiếp.
   const slot = student.devices?.[deviceType]
-  const deviceLabel = deviceType === 'mobile' ? 'điện thoại' : 'máy tính'
+  const isSameDevice = slot?.deviceId === deviceId
 
-  if (!slot || !slot.deviceId) {
-    // Slot trống -> ghi nhận thiết bị này làm thiết bị đầu tiên
-    if (!student.devices) student.devices = {}
-    student.devices[deviceType] = {
-      deviceId,
-      userAgent: req.headers['user-agent'] || '',
-      firstLoginAt: new Date(),
-    }
-    await student.save()
-  } else if (slot.deviceId !== deviceId) {
-    // Slot đã có thiết bị khác -> chặn
-    res.status(403)
-    throw new Error(
-      `Tài khoản này đã được sử dụng trên một ${deviceLabel} khác. ` +
-      `Nếu bạn vừa đổi thiết bị, vui lòng liên hệ trung tâm để được hỗ trợ mở khóa.`
-    )
+  if (!student.devices) student.devices = {}
+  student.devices[deviceType] = {
+    deviceId,
+    userAgent: req.headers['user-agent'] || '',
+    // Giữ nguyên mốc lần đầu nếu vẫn là máy cũ — đổi máy thì tính lại từ đầu.
+    firstLoginAt: isSameDevice && slot.firstLoginAt ? slot.firstLoginAt : new Date(),
   }
-  // Nếu slot.deviceId === deviceId -> đúng thiết bị cũ, cho qua bình thường
+  await student.save()
   // ============================================================
 
-  const token = signStudentToken(student)
+  const token = signStudentToken(student, deviceId, deviceType)
 
   res.json({
     token,

@@ -70,6 +70,27 @@ const protectStudent = asyncHandler(async function protectStudent(req, res, next
     throw err
   }
 
+  // THIẾT BỊ NÀY CÒN ĐANG GIỮ CHỖ KHÔNG?
+  //
+  // Đây là chỗ thực thi cơ chế "máy mới đăng nhập thì máy cũ tự đăng xuất".
+  // JWT không thu hồi được, nên máy cũ vẫn cầm token hợp lệ về mặt chữ ký —
+  // nhưng deviceId trong đó đã bị máy mới ghi đè ở bản ghi học viên.
+  //
+  // KHÔNG bỏ qua token thiếu deviceId. Token cấp trước lần đổi này không có
+  // trường đó; tha cho chúng thì suốt 7 ngày (hạn token) vẫn còn một đường
+  // vòng qua được kiểm tra thiết bị. Hậu quả của việc không tha: mọi học viên
+  // đang đăng nhập bị đăng xuất MỘT lần sau khi deploy — chấp nhận được.
+  const slotId = student.devices?.[decoded.deviceType]?.deviceId || null
+
+  if (!decoded.deviceId || decoded.deviceId !== slotId) {
+    res.status(401)
+    const err = new Error(
+      'Tài khoản của bạn vừa được đăng nhập trên một thiết bị khác. Vui lòng đăng nhập lại.'
+    )
+    err.appCode = 'DEVICE_TAKEN_OVER'
+    throw err
+  }
+
   req.student = student
   next()
 })
