@@ -8,3 +8,15 @@ storage/
 
 # File xuất XML để đối chứng — không đưa lên git
 ise-xml-dump.txt
+
+# Token quản trị dùng cho script chuyển dữ liệu — KHÔNG BAO GIỜ commit
+ACCESS_TOKEN.md
+*.token
+.migrate.env
+
+# Tài liệu gốc khách gửi (có thể chứa nội dung chưa công bố)
+FILE_DOCS/
+backup-lessons/
+
+# Rác của macOS Finder
+.DS_Store

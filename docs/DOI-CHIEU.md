@@ -40,6 +40,13 @@ Chạy `npm run verify` để kiểm chứng lại toàn bộ mục này.
 | 7 | `dp_message` tầng `word` và `serr_msg` **không tồn tại** trong XML thật | Kiểm 3 file XML, `category=read_sentence`, `ent=cn_vip`. Code đọc chúng chỉ là lưới an toàn, không chạy. |
 | 8 | Đối chiếu IAT không siết oan bài đọc đúng | 86 lượt đã lưu: 4 lượt bị siết, **0 lượt đọc sạch**. |
 | 9 | Tiếng nói dốc mạnh về tần số thấp | Mẫu TTS **sạch** cũng chỉ đạt "95% rolloff" ở 1453 Hz. Mọi ngưỡng tuyệt đối về dải tần phải hiệu chỉnh bằng mẫu chuẩn. |
+| 10 | Đưa **một chữ Hán rời** cho Azure TTS thì nó đọc theo **thanh từ điển**, không phải thanh trong câu | 很 đọc rời và 很 ép `hen 3` cho ra file âm thanh **giống hệt từng byte**, trong khi iFLYTEK chấm 很 trong 很好 là `hen2`. Nút "Đọc mẫu" từng dạy sai thanh. |
+| 11 | SSML `<phoneme alphabet="sapi">` **ép được** cách đọc | Ép `hen 2` vs `hen 3` cho hai file khác nhau. Chạy được cả thanh nhẹ (`me 5`), ü (`nv 3`) và từ 3 âm tiết. |
+| 12 | Azure đọc **đúng** khi được cho cả từ | 您好 ép `nin 2 hao 3` và không ép cho ra file giống hệt. Lỗi chỉ phát sinh ở chữ đứng lẻ — đúng như khách chẩn đoán ("dùng cái ở phần từ vựng đọc ấy"). |
+| 14 | iFLYTEK **từ chối** câu mẫu không có chữ Hán nào | Cùng một file audio: `"2038559800。"` và `"2038559800"` đều lỗi `ret=8195`; `"二零三八五五九八零零"` chấm được 95.99. Đây là lỗi khách báo ở Bài 4. |
+| 15 | Có chữ Hán thì iFLYTEK **tự đọc số theo ngữ cảnh** | `800块`→`八百` (3 chữ số thành 2 âm), `29岁`→`二十九` (2 thành 3), `215房间`→`二幺五` (dùng 幺 đúng kiểu đọc số phòng). |
+| 16 | Phiên âm bài học **đã viết theo cách đọc**, nên khớp sẵn với iFLYTEK | 16 dòng thoại có chữ số: số âm tiết trong phiên âm bằng đúng số chữ iFLYTEK trả về. Phần gom từ không bị ảnh hưởng — không có bug ngầm. |
+| 13 | Số thanh 0/5/6-9 của iFLYTEK **không suy ra được** thanh điệu | Đối chiếu phiên âm bài học: 字 `zi9` = míng**zi** (thanh nhẹ) nhưng 气 `qi9` = tiān**qì** (thanh 4). Cùng số 9, hai nghĩa. Nên chỉ ép SSML khi thanh 1-4. |
 
 ---
 
@@ -56,6 +63,7 @@ làm lại từ đầu.
 | "`perr_level_msg=2` nên hiển thị vàng dù không có lỗi" | Tự tạo lỗi mà máy chấm không báo. Một bài `phone_score=100, tone_score=100` vẫn hiện 2 từ vàng + thẻ "Phát âm chưa đúng" điểm 100. |
 | "95% rolloff dưới 3500 Hz nghĩa là băng hẹp" | Mẫu TTS sạch cũng chỉ 1453 Hz. Ngưỡng vô nghĩa, gắn cờ đỏ cho mọi file. |
 | "98% năng lượng dưới 500 Hz nghĩa là mất dải cao" | Cắt dải dưới 300 Hz thì phổ trở lại gần bình thường. Thực ra là **nhiễu âm trầm** che lấp phép đo. |
+| "iFLYTEK là bên tách 您好 thành 您 \| 好" | Sai. Việc phân từ là của **ta**: `wordSegmentation.js` cắt theo dấu cách trong phiên âm bài học, và pinyin viết "Nín hǎo" thành hai token. iFLYTEK chỉ trả về từng chữ. |
 
 ---
 

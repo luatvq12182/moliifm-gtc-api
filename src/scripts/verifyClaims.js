@@ -231,6 +231,110 @@ console.log('\n6. ÉP CÁCH ĐỌC CHO TTS CÓ AN TOÀN KHÔNG?\n')
 }
 
 // ---------------------------------------------------------------------------
+console.log('\n7. CÂU MẪU TOÀN CHỮ SỐ CÓ GỬI ĐI CHẤM ĐƯỢC KHÔNG?\n')
+{
+    const { toSpeakableText } = require('../lib/numericText')
+    const say = (text, pinyin) => toSpeakableText(text, pinyin).text || '(rỗng)'
+
+    // Đo thật với iFLYTEK (cùng một file audio, đổi mỗi câu mẫu):
+    //   "2038559800。"          -> lỗi 8195, không chấm được
+    //   "二零三八五五九八零零"   -> chấm được, 95.99 điểm
+    check(
+        'Số điện thoại trần (dòng thật của Bài 4)',
+        say('2038559800。', 'Dàwèi: Èr líng sān bā wǔ wǔ jiǔ bā líng líng.'),
+        '二零三八五五九八零零',
+        'iFLYTEK từ chối câu không có chữ Hán'
+    )
+    check('Giá tiền đọc thành số', say('800。', 'Bābǎi.'), '八百', 'không phải 八零零')
+    check('Số phòng đọc rời', say('215', 'Èr yāo wǔ.'), '二幺五', '1 đọc là 幺')
+    check('Không có phiên âm thì đọc rời từng số', say('2038559800', ''), '二零三八五五九八零零')
+    check('Câu đã có chữ Hán thì KHÔNG đụng vào', say('这条裙子800块。', ''), '这条裙子800块。', 'iFLYTEK tự lo')
+    check('Không chữ Hán, không chữ số', say('ABC', ''), '(rỗng)', 'báo lỗi tử tế thay vì gửi đi')
+
+    // Frontend có BẢN SAO của module này (trang quản trị cần cảnh báo ngay lúc
+    // gõ). Hai bản lệch nhau thì cảnh báo nói một đằng, máy chủ làm một nẻo.
+    const fs = require('fs')
+    const path = require('path')
+    const fePath = path.join(__dirname, '..', '..', '..', 'gtc-fe', 'src', 'lib', 'numericText.js')
+
+    if (!fs.existsSync(fePath)) {
+        console.log('  ‑  Bỏ qua đối chiếu bản frontend: không tìm thấy file\n')
+    } else {
+        // eslint-disable-next-line no-eval
+        // Bọc trong hàm để các khai báo của bản frontend không đụng tên với
+        // bản API vừa require ở trên.
+        const feSay = eval(
+            '(function () {' + fs.readFileSync(fePath, 'utf8').replace(/^export /gm, '') + '; return toSpeakableText })()'
+        )
+        const cases = [
+            ['2038559800。', 'Dàwèi: Èr líng sān bā wǔ wǔ jiǔ bā líng líng.'],
+            ['800。', 'Bābǎi.'],
+            ['215', 'Èr yāo wǔ.'],
+            ['29', 'Èrshíjiǔ.'],
+            ['1000', 'Yìqiān.'],
+            ['2038559800', ''],
+            ['这条裙子800块。', ''],
+            ['ABC', ''],
+            ['', ''],
+        ]
+        const lechNhau = cases.filter(([t, p]) => {
+            const a = toSpeakableText(t, p)
+            const b = feSay(t, p)
+            return a.text !== b.text || a.changed !== b.changed || a.source !== b.source
+        })
+        check(
+            'Bản API và bản frontend cho cùng kết quả',
+            lechNhau.length === 0 ? 'khớp ' + cases.length + '/' + cases.length : 'LỆCH ' + lechNhau.length + ' ca',
+            'khớp ' + cases.length + '/' + cases.length,
+            'trang quản trị phải xem trước đúng thứ máy chủ gửi đi'
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n8. SỐ ĐIỆN THOẠI CÓ VỀ MỘT DẠNG DUY NHẤT KHÔNG?\n')
+{
+    const { normalizePhone } = require('../lib/phone')
+    const fs = require('fs')
+    const path = require('path')
+
+    const cases = [
+        ['0901234567', '0901234567'],
+        ['090 123 4567', '0901234567'],
+        ['090.123.4567', '0901234567'],
+        ['+84 901 234 567', '0901234567'],
+        ['84901234567', '0901234567'],
+        ['(090) 123-4567', '0901234567'],
+        ['02438123456', '02438123456'],
+        ['0841234567', '0841234567'],
+        ['901234567', ''],
+        ['12345', ''],
+        ['abc', ''],
+        ['', ''],
+    ]
+    check('Năm cách gõ cùng một số về cùng một dạng', [...new Set(cases.slice(0, 6).map(([i]) => normalizePhone(i)))].join(','), '0901234567', 'định danh đăng nhập')
+    check('084x là đầu số di động, không phải mã quốc gia', normalizePhone('0841234567'), '0841234567')
+    check('Thiếu số 0 đầu thì loại', normalizePhone('901234567') || '(rỗng)', '(rỗng)')
+
+    const fePath = path.join(__dirname, '..', '..', '..', 'gtc-fe', 'src', 'lib', 'phone.js')
+    if (!fs.existsSync(fePath)) {
+        console.log('  ‑  Bỏ qua đối chiếu bản frontend: không tìm thấy file\n')
+    } else {
+        // eslint-disable-next-line no-eval
+        const feNormalize = eval(
+            '(function () {' + fs.readFileSync(fePath, 'utf8').replace(/^export /gm, '') + '; return normalizePhone })()'
+        )
+        const lech = cases.filter(([i]) => normalizePhone(i) !== feNormalize(i))
+        check(
+            'Bản API và bản frontend cho cùng kết quả',
+            lech.length === 0 ? 'khớp ' + cases.length + '/' + cases.length : 'LỆCH ' + lech.length,
+            'khớp ' + cases.length + '/' + cases.length,
+            'form báo lỗi phải đúng thứ máy chủ sẽ chấp nhận'
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 console.log('\n' + '─'.repeat(96))
 console.log(`  ĐẠT ${pass}  ·  LỆCH ${fail}`)
 if (fail > 0) {
