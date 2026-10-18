@@ -19,6 +19,11 @@ const {
   commitImport,
   downloadTemplate,
 } = require('../controllers/studentImportController')
+const {
+  listStudentLessonAttempts,
+  getStudentLessonAttempt,
+  getStudentRecording,
+} = require('../controllers/lessonAttemptController')
 const uploadSpreadsheet = require('../middleware/uploadSpreadsheet')
 const { protectAdmin } = require('../middleware/auth')
 
@@ -42,8 +47,12 @@ router.patch('/:id/reset-password', resetStudentPassword)
 router.delete('/:id', deleteStudent)
 router.patch('/:id/reset-devices', resetStudentDevices)
 
-// Lịch sử luyện nói — chỉ hoạt động khi PRACTICE_HISTORY_ENABLED bật.
-// Xem src/config/features.js.
+// Lịch sử hoàn thành bài học — màn đối chiếu chính của giáo viên.
+router.get('/:id/lesson-attempts', listStudentLessonAttempts)
+router.get('/:id/lesson-attempts/:attemptId', getStudentLessonAttempt)
+router.get('/:id/recordings/:attemptId', getStudentRecording)
+
+// Chi tiết từng lượt luyện nói (chấm từng chữ + ghi âm) của một học viên.
 router.get('/:id/practice-attempts', getStudentPracticeAttempts)
 router.get('/:id/practice-attempts/:attemptId/audio', getPracticeAttemptAudio)
 router.delete('/:id/practice-attempts', deleteStudentPracticeAttempts)

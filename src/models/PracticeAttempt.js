@@ -21,9 +21,17 @@ const charResultSchema = new mongoose.Schema(
 /**
  * Một lượt học viên luyện đọc MỘT câu.
  *
- * CHỈ được ghi khi PRACTICE_HISTORY_ENABLED bật (xem src/config/features.js).
- * Toàn bộ collection này là dữ liệu của giai đoạn phát triển/nghiệm thu; khi
- * sản phẩm ra thị trường thì tắt cờ và có thể xoá sạch collection.
+ * ĐÃ ĐỔI VAI TRÒ. Trước đây đây là dữ liệu giai đoạn nghiệm thu, nằm sau cờ
+ * PRACTICE_HISTORY_ENABLED (mặc định tắt) và được ghi là "có thể xoá sạch".
+ * Nay khách đặt hàng lưu lịch sử luyện nói kèm ghi âm, nên collection này trở
+ * thành KHO CHI TIẾT CHÍNH THỨC: chấm từng chữ, XML thô của iFLYTEK, file ghi
+ * âm. Cờ đã được gỡ bỏ.
+ *
+ * Vòng đời một bản ghi:
+ *   lessonAttempt = null     -> TẠM, xoá sau 24 giờ nếu bài không được hoàn thành
+ *   lessonAttempt có giá trị -> GIỮ lâu dài, thuộc một lượt hoàn thành bài
+ *
+ * Xem lib/lessonAttemptClaim.js và lib/practiceCleanup.js.
  */
 const practiceAttemptSchema = new mongoose.Schema(
     {
@@ -33,6 +41,29 @@ const practiceAttemptSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
+
+        // BẢN GHI NÀY ĐÃ ĐƯỢC GIỮ LẠI CHƯA?
+        //
+        //   null          -> TẠM. Học viên mới đọc câu này, chưa hoàn thành cả
+        //                    bài. Tác vụ dọn định kỳ sẽ xoá sau 24 giờ cùng
+        //                    file ghi âm của nó.
+        //   có giá trị    -> GIỮ. Thuộc về một lượt hoàn thành bài (LessonAttempt).
+        //
+        // Khách chốt: chỉ lưu khi học viên hoàn thành TRỌN VẸN một bài. Nhưng
+        // file ghi âm phải ghi xuống đĩa ngay lúc đọc (giữ trong bộ nhớ trình
+        // duyệt rồi tải 25 file một lúc lúc kết thúc là quá dễ hỏng trên mạng
+        // di động). Hai điều đó chỉ đi chung được nếu ghi trước rồi dọn sau —
+        // và trường này là thứ phân biệt cái nào đáng giữ.
+        lessonAttempt: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'LessonAttempt',
+            default: null,
+        },
+
+        // Định dạng file ghi âm hiện tại. Ghi xuống là WAV cho nhanh; tác vụ
+        // dọn định kỳ nén các bản ĐÃ GIỮ sang AAC (nhỏ hơn ~7 lần, đo trên dữ
+        // liệu thật) rồi cập nhật lại trường này.
+        audioFormat: { type: String, enum: ['wav', 'm4a'], default: 'wav' },
 
         // --- Câu đã đọc thuộc bài nào ---
         // Lưu cả ObjectId (để join) LẪN slug/tiêu đề dạng chuỗi (để hiển thị).
@@ -45,7 +76,17 @@ const practiceAttemptSchema = new mongoose.Schema(
         lessonTitle: { type: String, default: '' },
 
         // --- Câu cụ thể trong bài ---
-        lineIndex: { type: Number, default: -1 }, // vị trí trong danh sách hội thoại đã gộp
+        // VỊ TRÍ CÂU, cần CẢ HAI số mới xác định được là câu nào.
+        //
+        // `lineIndex` là vị trí TRONG MỘT VIDEO, không phải trong danh sách
+        // gộp của cả bài — SpeakingSection nhận hội thoại đã lọc theo video
+        // rồi mới đánh số. Comment cũ ở đây ghi là "danh sách đã gộp", sai.
+        //
+        // Hệ quả nếu thiếu `videoIndex`: bài 3 video thì câu đầu của cả ba
+        // video đều mang lineIndex = 0 với cùng lessonId. Không phân biệt
+        // được, và khi chọn bản ghi để giữ lại sẽ xoá nhầm hai trong ba.
+        videoIndex: { type: Number, default: -1 },
+        lineIndex: { type: Number, default: -1 },
         referenceText: { type: String, required: true }, // câu mẫu (chữ Hán)
         referencePinyin: { type: String, default: '' },
         referenceVi: { type: String, default: '' },
@@ -108,7 +149,10 @@ const practiceAttemptSchema = new mongoose.Schema(
         // sao chữ 哦 bị báo sai thanh mẫu trong khi âm tiết này không có thanh
         // mẫu". Không có XML thô thì mọi kết luận về nhãn lỗi đều là suy đoán.
         //
-        // Chỉ lưu khi PRACTICE_HISTORY_ENABLED bật (giai đoạn phát triển).
+        // Luôn lưu. Đo trên dữ liệu thật: trung bình 8,9 KB mỗi bản ghi, và chỉ
+        // bản ghi được GIỮ mới tồn tại lâu dài — với lưu lượng hiện tại (khoảng
+        // 2.000 lượt chấm trong vài tuần) thì không đáng kể. Nếu sau này lưu
+        // lượng tăng mạnh, đây là trường đầu tiên nên cân nhắc bỏ.
         rawXml: { type: String, default: '' },
         isRejected: { type: Boolean, default: false },
         exceptInfo: { type: String, default: null },

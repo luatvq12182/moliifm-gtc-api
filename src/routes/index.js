@@ -6,18 +6,18 @@ const adminCurriculumRoutes = require('./adminCurriculumRoutes')
 const adminCourseRoutes = require('./adminCourseRoutes')
 const adminLessonRoutes = require('./adminLessonRoutes')
 const uploadRoutes = require('./uploadRoutes')
-
-const { features } = require('../config/features')
+const lessonAttemptRoutes = require('./lessonAttemptRoutes')
 
 const router = express.Router()
 
 router.get('/health', (req, res) => res.json({ status: 'ok' }))
 
-// Cờ tính năng cho frontend. Công khai, không chứa gì nhạy cảm — chỉ để giao
-// diện biết có nên hiện mục "Lịch sử luyện nói" trong trang quản trị hay không.
-router.get('/config', (req, res) =>
-  res.json({ practiceHistoryEnabled: features.practiceHistoryEnabled })
-)
+// Cờ tính năng cho frontend. Công khai, không chứa gì nhạy cảm.
+//
+// Hiện không còn cờ nào: PRACTICE_HISTORY_ENABLED đã được gỡ khi lưu lịch sử
+// luyện nói trở thành tính năng chính thức thay vì dữ liệu nghiệm thu. Giữ lại
+// endpoint để giao diện không phải đổi và để còn chỗ cho cờ sau này.
+router.get('/config', (req, res) => res.json({}))
 
 router.use('/auth', authRoutes)
 router.use('/students', studentRoutes)
@@ -31,6 +31,11 @@ router.use('/admin/curricula', adminCurriculumRoutes)
 router.use('/admin/courses', adminCourseRoutes)
 router.use('/admin/lessons', adminLessonRoutes)
 router.use('/admin/uploads', uploadRoutes)
+
+// Lịch sử học của học viên. Mount ở '/lesson-attempts' nên phải đứng TRƯỚC
+// publicCatalogRoutes (mount ở '/' và khớp mọi đường dẫn) — cùng lý do đã ghi
+// ở khối comment phía trên.
+router.use('/lesson-attempts', lessonAttemptRoutes)
 
 // Học viên xem (public, cần đăng nhập học viên — xem publicCatalogRoutes.js)
 router.use('/', publicCatalogRoutes)

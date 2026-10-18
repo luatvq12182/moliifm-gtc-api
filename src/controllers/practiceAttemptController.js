@@ -2,22 +2,10 @@ const fs = require('fs')
 const PracticeAttempt = require('../models/PracticeAttempt')
 const Student = require('../models/Student')
 const asyncHandler = require('../utils/asyncHandler')
-const { features } = require('../config/features')
 const { resolveStoragePath, deletePracticeAudio } = require('../lib/audioStorage')
-
-// Chặn sớm khi cờ đang tắt. Dùng cho mọi route lịch sử luyện nói: sản phẩm đã
-// ra thị trường thì các endpoint này coi như không tồn tại.
-function ensureEnabled(res) {
-    if (!features.practiceHistoryEnabled) {
-        res.status(404)
-        throw new Error('Tính năng lưu lịch sử luyện nói đang tắt.')
-    }
-}
 
 // GET /api/students/:id/practice-attempts?page=&limit=&lessonSlug=
 const getStudentPracticeAttempts = asyncHandler(async function getStudentPracticeAttempts(req, res) {
-    ensureEnabled(res)
-
     const student = await Student.findById(req.params.id).select('name phone email')
     if (!student) {
         res.status(404)
@@ -63,8 +51,6 @@ const getStudentPracticeAttempts = asyncHandler(async function getStudentPractic
 // Phát file WAV. Đi qua protectAdmin nên KHÔNG phục vụ file tĩnh công khai —
 // giọng nói học viên là dữ liệu cá nhân.
 const getPracticeAttemptAudio = asyncHandler(async function getPracticeAttemptAudio(req, res) {
-    ensureEnabled(res)
-
     const attempt = await PracticeAttempt.findOne({
         _id: req.params.attemptId,
         student: req.params.id, // ràng buộc luôn theo học viên, tránh đoán id chéo
@@ -91,8 +77,6 @@ const getPracticeAttemptAudio = asyncHandler(async function getPracticeAttemptAu
 // Xoá sạch lịch sử của một học viên (cả bản ghi DB lẫn file WAV).
 // Dùng khi nghiệm thu xong, hoặc khi học viên yêu cầu xoá dữ liệu cá nhân.
 const deleteStudentPracticeAttempts = asyncHandler(async function deleteStudentPracticeAttempts(req, res) {
-    ensureEnabled(res)
-
     const attempts = await PracticeAttempt.find({ student: req.params.id }).select('audioPath')
     await Promise.all(attempts.map((a) => deletePracticeAudio(a.audioPath)))
     const result = await PracticeAttempt.deleteMany({ student: req.params.id })

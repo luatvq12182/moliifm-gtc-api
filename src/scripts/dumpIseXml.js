@@ -8,7 +8,7 @@
  * Gửi file đó đi là đủ để phân tích — nó chứa cả câu mẫu, nhãn lỗi ta suy ra,
  * và XML gốc để đối chiếu xem suy ra đúng hay sai.
  *
- * Cần PRACTICE_HISTORY_ENABLED=true lúc học viên luyện thì XML mới được lưu.
+ * XML thô luôn được lưu kèm mỗi lượt luyện nói (cờ bật/tắt cũ đã gỡ).
  */
 
 require('dotenv').config()
@@ -31,7 +31,7 @@ async function main() {
 
     if (attempts.length === 0) {
         console.log('\nChưa có lượt nào lưu được XML.')
-        console.log('Kiểm tra: PRACTICE_HISTORY_ENABLED=true trong .env, rồi luyện nói lại vài câu.\n')
+        console.log('Chưa có bản ghi nào — hãy luyện nói vài câu rồi chạy lại.\n')
         await mongoose.connection.close()
         return
     }

@@ -5,6 +5,10 @@
   "type": "commonjs",
   "scripts": {
     "dev": "nodemon src/server.js",
+    "test": "node --test src",
+    "smoke:history": "node src/scripts/smokeLessonHistory.js",
+    "maintain:practice": "node src/scripts/practiceMaintenance.js",
+    "migrate:lesson-attempts": "node src/scripts/migrateLessonAttempts.js",
     "start": "node src/server.js",
     "seed:admin": "node src/seed/seedAdmin.js",
     "rescore:practice": "node src/scripts/rescorePracticeAttempts.js",

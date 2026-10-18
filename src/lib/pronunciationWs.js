@@ -17,7 +17,6 @@
 const WebSocket = require('ws')
 const jwt = require('jsonwebtoken')
 const { isConfigured, assessAndRecognize } = require('./iflytek')
-const { features } = require('../config/features')
 const { savePracticeAudio, SAMPLE_RATE } = require('./audioStorage')
 
 // Trần độ dài XML lưu vào DB. XML của một câu ~14 chữ thường 20-60KB; đặt trần
@@ -134,10 +133,21 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
             return found
         }
 
-        // Ghi lịch sử luyện nói. Không bao giờ được làm hỏng luồng chấm điểm:
-        // học viên đã có kết quả rồi, lưu trữ thất bại thì chỉ log lại.
+        /**
+         * Ghi lại lượt luyện nói này.
+         *
+         * LUÔN GHI, không còn sau cờ bật/tắt nào nữa. Trước đây đây là dữ liệu
+         * giai đoạn nghiệm thu nên mặc định tắt; nay lưu ghi âm và lịch sử
+         * luyện nói là TÍNH NĂNG khách đặt hàng.
+         *
+         * Bản ghi tạo ra ở đây là TẠM (lessonAttempt = null). Nó chỉ được giữ
+         * lại nếu học viên hoàn thành trọn vẹn cả bài; bỏ dở thì tác vụ dọn
+         * định kỳ xoá sau 24 giờ cùng file ghi âm. Xem lib/practiceCleanup.js.
+         *
+         * Không bao giờ được làm hỏng luồng chấm điểm: học viên đã có kết quả
+         * rồi, lưu trữ thất bại thì chỉ log lại.
+         */
         async function savePracticeHistory(pcm, assessment, spokenText, score, wordFeedback, spokenMatch) {
-            if (!features.practiceHistoryEnabled) return
             try {
                 const audio = await savePracticeAudio(student._id, pcm, SAMPLE_RATE)
                 const s = assessment.summary || {}
@@ -149,6 +159,7 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                     courseSlug: context.courseSlug || '',
                     lessonSlug: context.lessonSlug || '',
                     lessonTitle: context.lessonTitle || '',
+                    videoIndex: typeof context.videoIndex === 'number' ? context.videoIndex : -1,
                     lineIndex: typeof context.lineIndex === 'number' ? context.lineIndex : -1,
                     referenceText,
                     referencePinyin: context.pinyin || '',
@@ -187,6 +198,7 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                     spokenText: spokenText || '',
                     chars: assessment.chars || [],
                     audioPath: audio.relativePath,
+                    audioFormat: 'wav',
                     audioBytes: audio.bytes,
                     durationMs: audio.durationMs,
                     sampleRate: SAMPLE_RATE,
