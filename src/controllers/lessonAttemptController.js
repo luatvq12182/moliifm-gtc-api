@@ -404,7 +404,7 @@ const listStudentLessonAttempts = asyncHandler(async function listStudentLessonA
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20))
 
     const query = { student: student._id }
-    const [data, total] = await Promise.all([
+    const [rows, total, facets] = await Promise.all([
         LessonAttempt.find(query)
             .select(LIST_FIELDS)
             .sort({ completedAt: -1 })
@@ -412,11 +412,16 @@ const listStudentLessonAttempts = asyncHandler(async function listStudentLessonA
             .limit(limitNum)
             .lean(),
         LessonAttempt.countDocuments(query),
+        historyFacets(student._id),
     ])
 
     res.json({
         student,
-        data,
+        // Cùng "lần thứ mấy" và cùng số liệu tổng quan với màn của học viên —
+        // giáo viên cần thấy em này học lại bài mấy lần mà không phải tự so
+        // ngày giờ của các dòng trùng tên.
+        data: await attachAttemptNumbers(student._id, rows),
+        stats: facets.stats,
         pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     })
 })
