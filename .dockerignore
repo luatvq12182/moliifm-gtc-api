@@ -2,3 +2,8 @@ node_modules
 .env
 uploads
 npm-debug.log
+# Dữ liệu cá nhân và tài liệu nội bộ — không bao giờ được đóng vào image.
+storage
+ACCESS_TOKEN.md
+FILE_DOCS
+backup-lessons

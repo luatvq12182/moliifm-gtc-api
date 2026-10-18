@@ -23,6 +23,10 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./uploads:/app/uploads
+      # Ghi âm luyện nói của học viên (dữ liệu cá nhân, phục vụ Lịch sử học).
+      # PHẢI nằm ngoài container: không mount thì mỗi lần build lại là mất
+      # sạch file, trong khi DB vẫn giữ bản ghi trỏ tới chúng.
+      - ./storage:/app/storage
 
 volumes:
   gtc_mongo_data:
