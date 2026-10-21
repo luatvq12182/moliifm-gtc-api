@@ -77,10 +77,17 @@ const videoResultSchema = new mongoose.Schema(
 )
 
 /**
- * MỘT LƯỢT HỌC VIÊN HOÀN THÀNH TRỌN VẸN MỘT BÀI HỌC.
+ * MỘT LƯỢT HỌC MỘT BÀI — đang học dở hoặc đã hoàn thành.
  *
- * Chỉ được tạo khi học viên đi hết MỌI video × MỌI bước của bài. Bỏ dở giữa
- * chừng thì không có bản ghi nào — đúng yêu cầu của khách.
+ * LÀM ĐẾN ĐÂU LƯU ĐẾN ĐÓ (khách đổi yêu cầu, 10/2026). Trước đây bản ghi chỉ
+ * được tạo khi học viên đi hết cả bài; nay nó được tạo ngay từ câu trả lời
+ * hay lượt đọc đầu tiên, trạng thái `in_progress`, và cập nhật liên tục.
+ * Học viên bận việc giữa chừng thì lần sau mở bài ra học tiếp đúng chỗ cũ —
+ * trên máy nào cũng được, vì tiến độ nằm ở máy chủ.
+ *
+ * Mỗi học viên có TỐI ĐA MỘT lượt đang dở cho mỗi bài (chỉ mục duy nhất ở
+ * cuối file). Học xong thì lượt đó chuyển `completed`; mở bài ra học lại lần
+ * nữa là một lượt mới.
  *
  * QUAN HỆ VỚI PracticeAttempt: model này là MỤC LỤC, PracticeAttempt là kho
  * chi tiết (chấm từng chữ, XML thô của iFLYTEK, file ghi âm). Mỗi câu luyện
@@ -121,7 +128,30 @@ const lessonAttemptSchema = new mongoose.Schema(
         // thứ phân biệt nhanh nhất.
         courseThumbnail: { type: String, default: '' },
 
+        status: {
+            type: String,
+            enum: ['in_progress', 'completed'],
+            default: 'completed',
+        },
+        // null khi còn đang học. Mặc định Date.now là để giữ nguyên hành vi cho
+        // nơi tạo bản ghi theo kiểu cũ (hoàn thành ngay lúc tạo).
         completedAt: { type: Date, default: Date.now },
+        // Lần cuối học viên làm gì đó với lượt này (trả lời, đọc, sang bước).
+        // Màn lịch sử sắp xếp và lọc thời gian theo mốc này: bài đang dở học
+        // hôm qua phải đứng trên bài đã xong tuần trước.
+        activityAt: { type: Date, default: Date.now },
+        // 0..100, tính theo số bước đã xong (có tính phần dở của bước bài tập
+        // và luyện nói). Bài hoàn thành luôn là 100.
+        progressPercent: { type: Number, default: 100 },
+
+        // ẢNH CHỤP TIẾN ĐỘ để trang học dựng lại đúng chỗ cũ: video đang mở,
+        // bước đã xong, từng câu bài tập đã trả lời. Do trình duyệt tạo ra và
+        // chỉ trình duyệt hiểu — máy chủ không đọc nội dung, chỉ cất giữ (có
+        // giới hạn kích thước, xem controller). Xoá đi khi bài hoàn thành.
+        //
+        // Ghi âm luyện nói KHÔNG nằm ở đây: chúng là PracticeAttempt trỏ về
+        // lượt này, máy chủ tự ghi lúc chấm.
+        progress: { type: mongoose.Schema.Types.Mixed, default: null },
 
         // --- Tổng hợp cả bài ---
         exercise: {
@@ -160,8 +190,16 @@ const lessonAttemptSchema = new mongoose.Schema(
     { timestamps: true }
 )
 
-// Truy vấn chính của màn lịch sử: của một học viên, mới nhất trước.
+// Truy vấn chính của màn lịch sử: của một học viên, mới hoạt động nhất trước.
+lessonAttemptSchema.index({ student: 1, activityAt: -1 })
 lessonAttemptSchema.index({ student: 1, completedAt: -1 })
+// MỘT lượt đang dở cho mỗi (học viên, bài). Chặn ở tầng cơ sở dữ liệu chứ
+// không chỉ ở code: lượt đọc đầu tiên (qua WebSocket) và lần lưu tiến độ đầu
+// tiên (qua HTTP) có thể tới cùng lúc, và cả hai đều "tìm không thấy thì tạo".
+lessonAttemptSchema.index(
+    { student: 1, lesson: 1 },
+    { unique: true, partialFilterExpression: { status: 'in_progress' }, name: 'one_in_progress_per_lesson' }
+)
 // Màn đối chiếu của admin: ai đã học bài này.
 lessonAttemptSchema.index({ lesson: 1, completedAt: -1 })
 

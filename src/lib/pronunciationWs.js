@@ -28,6 +28,7 @@ const { toSpeakableText } = require('./numericText')
 const { computeSpokenMatch } = require('./spokenTextMatch')
 const Student = require('../models/Student')
 const PracticeAttempt = require('../models/PracticeAttempt')
+const { ensureInProgress } = require('./lessonProgress')
 
 // Trần bộ đệm audio cho MỘT lượt đọc.
 // 16000 mẫu/giây x 2 byte = 32 KB/giây. 90 giây ~ 2.8 MB. Câu dài nhất trong
@@ -140,9 +141,11 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
          * giai đoạn nghiệm thu nên mặc định tắt; nay lưu ghi âm và lịch sử
          * luyện nói là TÍNH NĂNG khách đặt hàng.
          *
-         * Bản ghi tạo ra ở đây là TẠM (lessonAttempt = null). Nó chỉ được giữ
-         * lại nếu học viên hoàn thành trọn vẹn cả bài; bỏ dở thì tác vụ dọn
-         * định kỳ xoá sau 24 giờ cùng file ghi âm. Xem lib/practiceCleanup.js.
+         * GẮN NGAY VÀO LƯỢT HỌC ĐANG DỞ của bài này (tạo nếu chưa có) — làm
+         * đến đâu lưu đến đó, học viên bỏ dở rồi quay lại vẫn còn nguyên các
+         * câu đã luyện. Chỉ khi không biết thuộc bài nào (thiếu lessonId) hoặc
+         * không tạo được lượt học thì bản ghi mới là TẠM (lessonAttempt =
+         * null) và bị tác vụ dọn xoá sau 24 giờ. Xem lib/practiceCleanup.js.
          *
          * Không bao giờ được làm hỏng luồng chấm điểm: học viên đã có kết quả
          * rồi, lưu trữ thất bại thì chỉ log lại.
@@ -152,8 +155,21 @@ function attachPronunciationWs(httpServer, path = '/ws/pronunciation') {
                 const audio = await savePracticeAudio(student._id, pcm, SAMPLE_RATE)
                 const s = assessment.summary || {}
 
+                // Lỗi ở đây KHÔNG được làm mất lượt đọc: rơi về bản ghi tạm,
+                // lần lưu tiến độ kế tiếp của trang học sẽ gắn nó vào lượt học.
+                let lessonAttemptId = null
+                if (context.lessonId) {
+                    try {
+                        const la = await ensureInProgress(student._id, context.lessonId, context)
+                        lessonAttemptId = la ? la._id : null
+                    } catch (err) {
+                        console.error('[pronunciationWs] Không gắn được vào lượt học:', err.message)
+                    }
+                }
+
                 await PracticeAttempt.create({
                     student: student._id,
+                    lessonAttempt: lessonAttemptId,
                     lesson: context.lessonId || null,
                     curriculumSlug: context.curriculumSlug || '',
                     courseSlug: context.courseSlug || '',
