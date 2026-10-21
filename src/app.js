@@ -17,7 +17,10 @@ app.use(
     origin: allowedOrigins.length > 0 ? allowedOrigins : '*',
   })
 )
-app.use(express.json())
+// 1 MB thay vì 100 KB mặc định: ảnh chụp tiến độ của bài nhiều video (từng câu
+// đã trả lời, gửi lên sau mỗi câu) có thể vượt 100 KB. Phần tiến độ còn bị
+// chặn riêng ở 256 KB trong controller lượt học.
+app.use(express.json({ limit: '1mb' }))
 
 // Cho phép truy cập trực tiếp ảnh đã upload qua URL dạng /uploads/images/xxx.png
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')))

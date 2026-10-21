@@ -44,16 +44,16 @@ const practiceAttemptSchema = new mongoose.Schema(
 
         // BẢN GHI NÀY ĐÃ ĐƯỢC GIỮ LẠI CHƯA?
         //
-        //   null          -> TẠM. Học viên mới đọc câu này, chưa hoàn thành cả
-        //                    bài. Tác vụ dọn định kỳ sẽ xoá sau 24 giờ cùng
-        //                    file ghi âm của nó.
-        //   có giá trị    -> GIỮ. Thuộc về một lượt hoàn thành bài (LessonAttempt).
+        //   có giá trị    -> GIỮ. Thuộc về một lượt học (LessonAttempt), đang dở
+        //                    hay đã xong đều vậy — gắn ngay lúc chấm.
+        //   null          -> TẠM. Không biết thuộc bài nào, hoặc chưa gắn được
+        //                    vào lượt học vì lỗi thoáng qua (lần lưu tiến độ kế
+        //                    tiếp sẽ gắn). Tác vụ dọn định kỳ xoá sau 24 giờ
+        //                    cùng file ghi âm của nó.
         //
-        // Khách chốt: chỉ lưu khi học viên hoàn thành TRỌN VẸN một bài. Nhưng
-        // file ghi âm phải ghi xuống đĩa ngay lúc đọc (giữ trong bộ nhớ trình
-        // duyệt rồi tải 25 file một lúc lúc kết thúc là quá dễ hỏng trên mạng
-        // di động). Hai điều đó chỉ đi chung được nếu ghi trước rồi dọn sau —
-        // và trường này là thứ phân biệt cái nào đáng giữ.
+        // Trước 10/2026 mọi lượt đọc đều tạm cho tới khi học viên xong cả bài
+        // (khách khi đó chỉ muốn lưu bài hoàn thành). Nay khách muốn làm đến
+        // đâu lưu đến đó nên lượt đọc được gắn ngay.
         lessonAttempt: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'LessonAttempt',

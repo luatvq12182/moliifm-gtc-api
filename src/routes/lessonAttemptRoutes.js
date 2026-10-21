@@ -1,6 +1,9 @@
 const express = require('express')
 const {
     createLessonAttempt,
+    getCurrentAttempt,
+    saveCurrentAttempt,
+    discardCurrentAttempt,
     listMyLessonAttempts,
     getMyLessonAttempt,
     getMyRecording,
@@ -16,6 +19,12 @@ router.use(protectStudent)
 
 router.post('/', createLessonAttempt)
 router.get('/', listMyLessonAttempts)
+
+// Lượt ĐANG DỞ của một bài: lấy về để học tiếp, lưu tiến độ, bỏ để học lại.
+// Đặt TRƯỚC '/:id' — để sau thì 'current' bị hiểu là một id lượt học.
+router.get('/current', getCurrentAttempt)
+router.put('/current', saveCurrentAttempt)
+router.delete('/current', discardCurrentAttempt)
 
 // Đặt TRƯỚC '/:id' — để sau thì 'recordings' bị hiểu là một id lượt học.
 router.get('/recordings/:attemptId', getMyRecording)
