@@ -71,6 +71,10 @@ const studentSchema = new mongoose.Schema(
       enum: ['active', 'locked'],
       default: 'active',
     },
+    // KHOÁ HỌC LIỆU (slide bài giảng) ĐƯỢC XEM. Admin cấp theo gói học viên đã
+    // mua. Mảng rỗng = chưa được xem khoá nào; khoá không có quyền thì học
+    // viên không thấy luôn (khách chốt ẩn hẳn, không hiện dạng mờ).
+    materialAccess: [{ type: mongoose.Schema.Types.ObjectId, ref: 'MaterialCourse' }],
     // 2 slot thiết bị được phép: 1 desktop + 1 mobile. Ghi nhận deviceId ở
     // lần đăng nhập đầu tiên của mỗi loại; thiết bị khác cùng loại sẽ bị chặn
     // cho tới khi admin reset slot đó về null.

@@ -7,6 +7,8 @@ const adminCourseRoutes = require('./adminCourseRoutes')
 const adminLessonRoutes = require('./adminLessonRoutes')
 const uploadRoutes = require('./uploadRoutes')
 const lessonAttemptRoutes = require('./lessonAttemptRoutes')
+const materialRoutes = require('./materialRoutes')
+const adminMaterialRoutes = require('./adminMaterialRoutes')
 
 const router = express.Router()
 
@@ -30,12 +32,16 @@ router.use('/students', studentRoutes)
 router.use('/admin/curricula', adminCurriculumRoutes)
 router.use('/admin/courses', adminCourseRoutes)
 router.use('/admin/lessons', adminLessonRoutes)
+router.use('/admin/materials', adminMaterialRoutes)
 router.use('/admin/uploads', uploadRoutes)
 
 // Lịch sử học của học viên. Mount ở '/lesson-attempts' nên phải đứng TRƯỚC
 // publicCatalogRoutes (mount ở '/' và khớp mọi đường dẫn) — cùng lý do đã ghi
 // ở khối comment phía trên.
 router.use('/lesson-attempts', lessonAttemptRoutes)
+
+// Học liệu khoá học (slide bài giảng). Cũng phải đứng TRƯỚC publicCatalogRoutes.
+router.use('/materials', materialRoutes)
 
 // Học viên xem (public, cần đăng nhập học viên — xem publicCatalogRoutes.js)
 router.use('/', publicCatalogRoutes)
