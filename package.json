@@ -7,6 +7,7 @@
     "dev": "nodemon src/server.js",
     "test": "node --test src",
     "smoke:history": "node src/scripts/smokeLessonHistory.js",
+    "smoke:materials": "node src/scripts/smokeMaterials.js",
     "maintain:practice": "node src/scripts/practiceMaintenance.js",
     "migrate:lesson-attempts": "node src/scripts/migrateLessonAttempts.js",
     "start": "node src/server.js",

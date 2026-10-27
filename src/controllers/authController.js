@@ -153,6 +153,9 @@ const studentLogin = asyncHandler(async function studentLogin(req, res) {
     student: {
       id: student._id,
       name: student.name,
+      // Số điện thoại là tên đăng nhập — giao diện cần nó (menu tài khoản,
+      // gợi ý mật khẩu mặc định ở trang Đổi mật khẩu).
+      phone: student.phone,
       email: student.email,
       course: student.course,
     },
@@ -165,6 +168,7 @@ const getStudentMe = asyncHandler(async function getStudentMe(req, res) {
   res.json({
     id: student._id,
     name: student.name,
+    phone: student.phone,
     email: student.email,
     course: student.course,
   })

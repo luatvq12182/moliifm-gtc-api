@@ -6,6 +6,7 @@ const { checkIndexes } = require('./lib/checkIndexes')
 const { attachPronunciationWs } = require('./lib/pronunciationWs')
 const { startMaintenanceLoop } = require('./lib/practiceCleanup')
 const { backfillLessonAttemptStatus } = require('./lib/lessonProgress')
+const { resumeMaterialConversions } = require('./lib/materialConvert')
 
 const PORT = process.env.PORT || 4000
 
@@ -21,6 +22,12 @@ async function start() {
     // Lượt học tạo trước khi có "đang học dở" chưa có trạng thái — gắn cho
     // chúng là đã hoàn thành. Chạy được nhiều lần, lần sau không còn gì để sửa.
     await backfillLessonAttemptStatus()
+
+    // Học liệu: chạy tiếp các bộ slide đang chuyển dở, cảnh báo nếu thiếu
+    // công cụ chuyển đổi. Không chờ — không được làm chậm việc mở cổng.
+    resumeMaterialConversions().catch((err) =>
+      console.error('[materialConvert] Không khởi động được:', err.message)
+    )
 
     // Tạo HTTP server tường minh (thay vì app.listen) để gắn được
     // WebSocket chấm phát âm iFLYTEK vào cùng server/cổng.
