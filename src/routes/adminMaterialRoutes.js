@@ -1,5 +1,6 @@
 const express = require('express')
 const c = require('../controllers/materialAdminController')
+const v = require('../controllers/materialVideoAdminController')
 const { protectAdmin } = require('../middleware/auth')
 
 // Học liệu khoá học — phía quản trị.
@@ -23,6 +24,13 @@ router.post('/decks/:id/file', c.replaceDeckFile)
 router.post('/decks/:id/retry', c.retryDeck)
 router.post('/decks/:id/sync', c.syncGoogleDeck)
 router.get('/decks/:id/pages/:n', c.getDeckPage)
+
+router.get('/videos', v.listVideos)
+router.post('/videos', v.createVideo)
+router.put('/videos/reorder', v.reorderVideos)
+router.put('/videos/:id', v.updateVideo)
+router.delete('/videos/:id', v.deleteVideo)
+router.get('/videos/:id/thumb', v.getVideoThumb)
 
 router.get('/access', c.listAccess)
 router.patch('/access', c.updateAccess)
