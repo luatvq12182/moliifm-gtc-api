@@ -3,9 +3,11 @@ const path = require('path')
 const mongoose = require('mongoose')
 const MaterialCourse = require('../models/MaterialCourse')
 const MaterialDeck = require('../models/MaterialDeck')
+const MaterialVideo = require('../models/MaterialVideo')
 const Student = require('../models/Student')
 const asyncHandler = require('../utils/asyncHandler')
 const uploadMaterial = require('../middleware/uploadMaterial')
+const { removeCourseVideos } = require('./materialVideoAdminController')
 const {
     deckDir,
     sourcePath,
@@ -87,12 +89,13 @@ function courseFields(body, res, { partial = false } = {}) {
     return out
 }
 
-/** GET /api/admin/materials/courses — kèm số bộ slide và số học viên được xem. */
+/** GET /api/admin/materials/courses — kèm số bộ slide, số video và số học viên được xem. */
 const listCourses = asyncHandler(async function listCourses(req, res) {
     const courses = await MaterialCourse.find().sort({ order: 1, createdAt: 1 }).lean()
     const ids = courses.map((c) => c._id)
-    const [deckCounts, accessCounts] = await Promise.all([
+    const [deckCounts, videoCounts, accessCounts] = await Promise.all([
         MaterialDeck.aggregate([{ $match: { courseId: { $in: ids } } }, { $group: { _id: '$courseId', n: { $sum: 1 } } }]),
+        MaterialVideo.aggregate([{ $match: { courseId: { $in: ids } } }, { $group: { _id: '$courseId', n: { $sum: 1 } } }]),
         Student.aggregate([
             { $match: { materialAccess: { $in: ids } } },
             { $unwind: '$materialAccess' },
@@ -101,11 +104,13 @@ const listCourses = asyncHandler(async function listCourses(req, res) {
         ]),
     ])
     const decks = new Map(deckCounts.map((d) => [String(d._id), d.n]))
+    const videos = new Map(videoCounts.map((d) => [String(d._id), d.n]))
     const access = new Map(accessCounts.map((d) => [String(d._id), d.n]))
     res.json(
         courses.map((c) => ({
             ...c,
             deckCount: decks.get(String(c._id)) || 0,
+            videoCount: videos.get(String(c._id)) || 0,
             studentCount: access.get(String(c._id)) || 0,
         }))
     )
@@ -130,8 +135,8 @@ const updateCourse = asyncHandler(async function updateCourse(req, res) {
 /**
  * DELETE /api/admin/materials/courses/:id[?force=1]
  *
- * Khoá còn bộ slide thì phải xác nhận lại (409 kèm số lượng) — xoá khoá là
- * xoá luôn mọi bộ slide, file, và quyền của học viên với khoá đó.
+ * Khoá còn bộ slide / video thì phải xác nhận lại (409 kèm số lượng) — xoá
+ * khoá là xoá luôn mọi bộ slide, video, file, và quyền của học viên với khoá đó.
  */
 const deleteCourse = asyncHandler(async function deleteCourse(req, res) {
     const course = await MaterialCourse.findById(req.params.id)
@@ -140,20 +145,22 @@ const deleteCourse = asyncHandler(async function deleteCourse(req, res) {
         throw new Error('Không tìm thấy khoá học liệu.')
     }
     const decks = await MaterialDeck.find({ courseId: course._id }).select('_id').lean()
+    const videoCount = await MaterialVideo.countDocuments({ courseId: course._id })
     const students = await Student.countDocuments({ materialAccess: course._id })
-    if ((decks.length || students) && req.query.force !== '1') {
+    if ((decks.length || videoCount || students) && req.query.force !== '1') {
         res.status(409)
         const err = new Error(
-            `Khoá này đang có ${decks.length} bộ slide và ${students} học viên được xem. Xoá khoá sẽ xoá hết.`
+            `Khoá này đang có ${decks.length} bộ slide, ${videoCount} video và ${students} học viên được xem. Xoá khoá sẽ xoá hết.`
         )
         err.appCode = 'MATERIAL_COURSE_IN_USE'
         throw err
     }
     for (const d of decks) await removeDeckFiles(d._id)
     await MaterialDeck.deleteMany({ courseId: course._id })
+    await removeCourseVideos(course._id)
     await Student.updateMany({ materialAccess: course._id }, { $pull: { materialAccess: course._id } })
     await course.deleteOne()
-    res.json({ deleted: true, decks: decks.length, students })
+    res.json({ deleted: true, decks: decks.length, videos: videoCount, students })
 })
 
 // ---------- bộ slide ----------

@@ -5,8 +5,8 @@
  *   SMOKE_PPTX=/đường/dẫn/file.pptx npm run smoke:materials   (thử cả PowerPoint)
  *   SMOKE_GOOGLE=1 npm run smoke:materials                    (thử cả Google thật, cần mạng)
  *
- * Phần Google mặc định chạy với một máy chủ GIẢ ngay trong script (đóng vai
- * Google Slides và Google Drive), nên không cần mạng.
+ * Phần Google và YouTube mặc định chạy với máy chủ GIẢ ngay trong script (đóng
+ * vai Google Slides, Google Drive, YouTube), nên không cần mạng.
  *
  * Cần LibreOffice + poppler-utils trên máy (giống Dockerfile). Tự dựng khoá,
  * học viên, file PDF mẫu; tự dọn sạch ở cuối, kể cả khi có bước thất bại.
@@ -25,7 +25,11 @@ const Admin = require('../models/Admin')
 const Student = require('../models/Student')
 const MaterialCourse = require('../models/MaterialCourse')
 const MaterialDeck = require('../models/MaterialDeck')
-const { deckDir } = require('../lib/materialConvert')
+const MaterialVideo = require('../models/MaterialVideo')
+const MaterialVideoProgress = require('../models/MaterialVideoProgress')
+const { deckDir, MATERIALS_DIR } = require('../lib/materialConvert')
+
+const videoThumb = (id) => path.join(MATERIALS_DIR, 'videos', `${id}.jpg`)
 
 const SLUG = 'smoke-mat-'
 const PHONES = { yes: '0900000061', no: '0900000062' }
@@ -107,6 +111,10 @@ async function cleanup() {
     const decks = await MaterialDeck.find({ courseId: { $in: ids } }).select('_id')
     for (const d of decks) await fs.promises.rm(deckDir(d._id), { recursive: true, force: true })
     await MaterialDeck.deleteMany({ courseId: { $in: ids } })
+    const videos = await MaterialVideo.find({ courseId: { $in: ids } }).select('_id')
+    for (const v of videos) await fs.promises.rm(videoThumb(v._id), { force: true })
+    await MaterialVideoProgress.deleteMany({ courseId: { $in: ids } })
+    await MaterialVideo.deleteMany({ courseId: { $in: ids } })
     await MaterialCourse.deleteMany({ _id: { $in: ids } })
     await Student.deleteMany({ phone: { $in: Object.values(PHONES) } })
 }
@@ -395,6 +403,98 @@ async function main() {
     const bad = await waitReady(r.body._id, A)
     check('file hỏng -> failed kèm lý do', [bad.conversion, Boolean(bad.conversionError)], ['failed', true])
 
+    // ---------- VIDEO BÀI GIẢNG ----------
+    console.log('\nVIDEO BÀI GIẢNG (YouTube giả)')
+    const yt = http.createServer((q, s) => {
+        const u = new URL(q.url, 'http://x')
+        const vid = (u.searchParams.get('url') || '').split('v=')[1] || u.searchParams.get('v')
+        const known = { VIDEOOK0001: 'Bài 1 — Chào hỏi (video)', VIDEONODUR1: 'Bài 2 — Số đếm', VIDEONEW001: 'Bài 1 — bản sửa' }
+        if (u.pathname === '/oembed') {
+            if (!known[vid]) { s.writeHead(404); return s.end('Not Found') }
+            s.writeHead(200, { 'Content-Type': 'application/json' })
+            return s.end(JSON.stringify({ title: known[vid], type: 'video' }))
+        }
+        if (u.pathname === '/watch') {
+            s.writeHead(200, { 'Content-Type': 'text/html' })
+            return s.end(vid === 'VIDEONODUR1' ? '<html>đổi giao diện</html>' : '<html>..."lengthSeconds":"3600",...</html>')
+        }
+        // Ảnh bìa: chỉ có cỡ hqdefault (giống nhiều video thật không có maxres).
+        if (/\/hqdefault\.jpg$/.test(u.pathname)) {
+            s.writeHead(200, { 'Content-Type': 'image/jpeg' })
+            return s.end(Buffer.alloc(4000, 0xff))
+        }
+        s.writeHead(404); s.end()
+    })
+    await new Promise((ok) => yt.listen(0, '127.0.0.1', ok))
+    const ytBase = `http://127.0.0.1:${yt.address().port}`
+    process.env.YOUTUBE_OEMBED_BASE = ytBase + '/oembed'
+    process.env.YOUTUBE_WATCH_BASE = ytBase + '/watch'
+    process.env.YOUTUBE_THUMB_BASE = ytBase + '/vi'
+    let video
+    try {
+        r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'https://example.com/v.mp4' } })
+        check('link không phải YouTube -> 400', [r.status, /không phải video YouTube/.test(r.body.message)], [400, true])
+        r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'https://youtu.be/PRIVATE0001' } })
+        check('video riêng tư / sai -> 400 kèm hướng dẫn "Không công khai"', [r.status, /Không công khai/.test(r.body.message)], [400, true])
+
+        r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'https://www.youtube.com/watch?v=VIDEOOK0001&t=5s' } })
+        video = r.body
+        check('thêm video: tên + thời lượng lấy từ YouTube, có ảnh bìa, mặc định nháp',
+            [r.status, video.title, video.durationSec, video.hasThumb, video.status], [201, 'Bài 1 — Chào hỏi (video)', 3600, true, 'draft'])
+        r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'youtu.be/VIDEOOK0001' } })
+        check('dán trùng video trong khoá -> 400', r.status, 400)
+        r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'https://youtu.be/VIDEONODUR1', title: 'Số đếm', status: 'published' } })
+        const v2 = r.body
+        check('tự đặt tên; YouTube không cho đọc thời lượng -> 0', [v2.title, v2.durationSec], ['Số đếm', 0])
+
+        r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
+        check('học viên: chỉ thấy video đã xuất bản', r.body.videos.map((v) => v.title), ['Số đếm'])
+        await api('PUT', `/admin/materials/videos/${video._id}`, { token: A, body: { status: 'published' } })
+        await api('PUT', '/admin/materials/videos/reorder', { token: A, body: { courseId: course._id, ids: [v2._id, video._id] } })
+        r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
+        check('xuất bản + sắp xếp lại -> đúng thứ tự', r.body.videos.map((v) => v.title), ['Số đếm', 'Bài 1 — Chào hỏi (video)'])
+        check('danh sách KHÔNG lộ mã YouTube', JSON.stringify(r.body).includes('VIDEOOK0001'), false)
+        r = await api('GET', '/materials/courses', { token: tYes })
+        check('thẻ khoá đếm 2 video', r.body.find((c) => c.slug === SLUG + 'hsk3').videoCount, 2)
+
+        r = await api('GET', `/materials/videos/${video._id}`, { token: tYes })
+        check('mở video: có mã YouTube, chưa xem', [r.status, r.body.youtubeId, r.body.progress], [200, 'VIDEOOK0001', null])
+        r = await api('GET', `/materials/videos/${video._id}/thumb`, { token: tYes })
+        check('ảnh bìa qua máy chủ, cấm cache', [r.status, r.headers.get('content-type'), r.headers.get('cache-control')], [200, 'image/jpeg', 'private, no-store'])
+
+        r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tYes, body: { position: 1200, duration: 3600 } })
+        check('lưu chỗ đang xem: 1200s = 33%', [r.status, r.body.position, r.body.percent, r.body.completed], [200, 1200, 33, false])
+        r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tYes, body: { position: 300, duration: 3600 } })
+        check('tua lại -> chỗ dừng đổi, % giữ theo chỗ xa nhất', [r.body.position, r.body.percent], [300, 33])
+        r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tYes, body: { position: 99999, duration: 3600 } })
+        check('vị trí vượt thời lượng -> kẹp lại, xem >= 90% là xong', [r.body.position, r.body.percent, r.body.completed], [3600, 100, true])
+        r = await api('GET', `/materials/videos/${video._id}`, { token: tYes })
+        check('mở lại -> có chỗ đang xem để phát tiếp', r.body.progress.position, 3600)
+        r = await api('PUT', `/materials/videos/${v2._id}/progress`, { token: tYes, body: { position: 60, duration: 1805.4 } })
+        r = await api('GET', `/admin/materials/videos?courseId=${course._id}`, { token: A })
+        check('thời lượng còn thiếu -> lấy theo trình phát báo về', r.body.find((v) => v._id === v2._id).durationSec, 1805)
+
+        r = await api('GET', `/materials/videos/${video._id}`, { token: tNo })
+        check('học viên chưa có quyền -> 403', [r.status, r.body.code], [403, 'MATERIAL_NO_ACCESS'])
+        r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tNo, body: { position: 10 } })
+        check('...lưu tiến độ cũng 403', r.status, 403)
+        r = await api('GET', `/materials/videos/${video._id}/thumb`)
+        check('không đăng nhập -> 401', r.status, 401)
+        await api('PUT', `/admin/materials/videos/${v2._id}`, { token: A, body: { status: 'draft' } })
+        r = await api('GET', `/materials/videos/${v2._id}`, { token: tYes })
+        check('ẩn video -> học viên không mở được (404)', r.status, 404)
+
+        r = await api('PUT', `/admin/materials/videos/${video._id}`, { token: A, body: { url: 'https://youtu.be/VIDEONEW001' } })
+        check('thay link video -> giữ tên, đổi mã, xoá tiến độ cũ',
+            [r.status, r.body.title, r.body.youtubeId, await MaterialVideoProgress.countDocuments({ video: video._id })],
+            [200, 'Bài 1 — Chào hỏi (video)', 'VIDEONEW001', 0])
+        r = await api('DELETE', `/admin/materials/videos/${v2._id}`, { token: A })
+        check('xoá video -> xoá cả ảnh bìa + tiến độ',
+            [r.status, fs.existsSync(videoThumb(v2._id)), await MaterialVideoProgress.countDocuments({ video: v2._id })], [200, false, 0])
+    } finally {
+        yt.close()
+    }
+
     // ---------- XOÁ ----------
     console.log('\nXOÁ')
     r = await api('DELETE', `/admin/materials/decks/${bad._id}`, { token: A })
@@ -404,6 +504,7 @@ async function main() {
     r = await api('DELETE', `/admin/materials/courses/${course._id}?force=1`, { token: A })
     check('xoá hẳn -> gỡ luôn quyền của học viên', [r.status, (await Student.findById(yes._id)).materialAccess.length], [200, 0])
     check('...và file của mọi bộ slide', fs.existsSync(deckDir(deck._id)), false)
+    check('...và video + ảnh bìa', [await MaterialVideo.countDocuments({ courseId: course._id }), fs.existsSync(videoThumb(video._id))], [0, false])
 
     console.log('\nQUYỀN')
     r = await api('GET', '/admin/materials/courses', { token: tYes })

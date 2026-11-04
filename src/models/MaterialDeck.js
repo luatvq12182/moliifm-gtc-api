@@ -9,8 +9,7 @@ const mongoose = require('mongoose')
  * xem ảnh:
  *
  *  - Khách yêu cầu học viên XEM được nhưng KHÔNG tải được. File gốc không bao
- *    giờ rời máy chủ; ảnh từng trang chỉ phát qua route có kiểm quyền, kèm
- *    watermark tên học viên ở giao diện (xem trang xem slide).
+ *    giờ rời máy chủ; ảnh từng trang chỉ phát qua route có kiểm quyền.
  *  - Hiển thị giống nhau trên mọi máy, không phụ thuộc máy học viên có cài
  *    PowerPoint hay font chữ Hán nào.
  *
