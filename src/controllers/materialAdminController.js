@@ -4,6 +4,9 @@ const mongoose = require('mongoose')
 const MaterialCourse = require('../models/MaterialCourse')
 const MaterialDeck = require('../models/MaterialDeck')
 const MaterialVideo = require('../models/MaterialVideo')
+const MaterialExercise = require('../models/MaterialExercise')
+const MaterialExerciseAttempt = require('../models/MaterialExerciseAttempt')
+const { cleanSections, countItems } = require('../lib/exercise')
 const Student = require('../models/Student')
 const asyncHandler = require('../utils/asyncHandler')
 const uploadMaterial = require('../middleware/uploadMaterial')
@@ -89,11 +92,11 @@ function courseFields(body, res, { partial = false } = {}) {
     return out
 }
 
-/** GET /api/admin/materials/courses — kèm số bộ slide, số video và số học viên được xem. */
+/** GET /api/admin/materials/courses — kèm số bộ slide, số video, số câu bài tập và số học viên được xem. */
 const listCourses = asyncHandler(async function listCourses(req, res) {
     const courses = await MaterialCourse.find().sort({ order: 1, createdAt: 1 }).lean()
     const ids = courses.map((c) => c._id)
-    const [deckCounts, videoCounts, accessCounts] = await Promise.all([
+    const [deckCounts, videoCounts, accessCounts, sets] = await Promise.all([
         MaterialDeck.aggregate([{ $match: { courseId: { $in: ids } } }, { $group: { _id: '$courseId', n: { $sum: 1 } } }]),
         MaterialVideo.aggregate([{ $match: { courseId: { $in: ids } } }, { $group: { _id: '$courseId', n: { $sum: 1 } } }]),
         Student.aggregate([
@@ -102,7 +105,9 @@ const listCourses = asyncHandler(async function listCourses(req, res) {
             { $match: { materialAccess: { $in: ids } } },
             { $group: { _id: '$materialAccess', n: { $sum: 1 } } },
         ]),
+        MaterialExercise.find({ courseId: { $in: ids } }).select('courseId sections').lean(),
     ])
+    const exercises = new Map(sets.map((x) => [String(x.courseId), countItems(x.sections)]))
     const decks = new Map(deckCounts.map((d) => [String(d._id), d.n]))
     const videos = new Map(videoCounts.map((d) => [String(d._id), d.n]))
     const access = new Map(accessCounts.map((d) => [String(d._id), d.n]))
@@ -111,6 +116,7 @@ const listCourses = asyncHandler(async function listCourses(req, res) {
             ...c,
             deckCount: decks.get(String(c._id)) || 0,
             videoCount: videos.get(String(c._id)) || 0,
+            exerciseCount: exercises.get(String(c._id)) || 0,
             studentCount: access.get(String(c._id)) || 0,
         }))
     )
@@ -158,9 +164,61 @@ const deleteCourse = asyncHandler(async function deleteCourse(req, res) {
     for (const d of decks) await removeDeckFiles(d._id)
     await MaterialDeck.deleteMany({ courseId: course._id })
     await removeCourseVideos(course._id)
+    await MaterialExercise.deleteMany({ courseId: course._id })
+    await MaterialExerciseAttempt.deleteMany({ courseId: course._id })
     await Student.updateMany({ materialAccess: course._id }, { $pull: { materialAccess: course._id } })
     await course.deleteOne()
     res.json({ deleted: true, decks: decks.length, videos: videoCount, students })
+})
+
+// ---------- bài tập của khoá ----------
+
+/** GET /api/admin/materials/courses/:id/exercise — đề đầy đủ (kèm đáp án) để soạn. */
+const getCourseExercise = asyncHandler(async function getCourseExercise(req, res) {
+    const course = isId(req.params.id) ? await MaterialCourse.findById(req.params.id).lean() : null
+    if (!course) {
+        res.status(404)
+        throw new Error('Không tìm thấy khoá học liệu.')
+    }
+    const [set, attempts, videoCount] = await Promise.all([
+        MaterialExercise.findOne({ courseId: course._id }).lean(),
+        MaterialExerciseAttempt.countDocuments({ courseId: course._id }),
+        MaterialVideo.countDocuments({ courseId: course._id, status: 'published' }),
+    ])
+    res.json({
+        course: { _id: course._id, name: course.name, slug: course.slug },
+        sections: set?.sections || [],
+        version: set?.version || 0,
+        attempts,
+        videoCount,
+    })
+})
+
+/**
+ * PUT /api/admin/materials/courses/:id/exercise { sections }
+ *
+ * Lưu cả bộ đề của khoá. Để trống (sections: []) = khoá không có bài tập. Lượt
+ * làm cũ giữ bản chụp đề lúc nộp nên sửa đề không làm sai kết quả cũ.
+ */
+const saveCourseExercise = asyncHandler(async function saveCourseExercise(req, res) {
+    const course = isId(req.params.id) ? await MaterialCourse.findById(req.params.id).lean() : null
+    if (!course) {
+        res.status(404)
+        throw new Error('Không tìm thấy khoá học liệu.')
+    }
+    let sections
+    try {
+        sections = cleanSections(req.body.sections)
+    } catch (err) {
+        res.status(400)
+        throw err
+    }
+    const set = await MaterialExercise.findOneAndUpdate(
+        { courseId: course._id },
+        { $set: { sections }, $inc: { version: 1 } },
+        { upsert: true, new: true }
+    ).lean()
+    res.json({ sections: set.sections, version: set.version, exerciseCount: countItems(set.sections) })
 })
 
 // ---------- bộ slide ----------
@@ -611,6 +669,8 @@ module.exports = {
     createCourse,
     updateCourse,
     deleteCourse,
+    getCourseExercise,
+    saveCourseExercise,
     listDecks,
     getDeck,
     createDeck,

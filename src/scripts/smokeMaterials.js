@@ -27,6 +27,9 @@ const MaterialCourse = require('../models/MaterialCourse')
 const MaterialDeck = require('../models/MaterialDeck')
 const MaterialVideo = require('../models/MaterialVideo')
 const MaterialVideoProgress = require('../models/MaterialVideoProgress')
+const MaterialExercise = require('../models/MaterialExercise')
+const MaterialExerciseAttempt = require('../models/MaterialExerciseAttempt')
+const AppSetting = require('../models/AppSetting')
 const { deckDir, MATERIALS_DIR } = require('../lib/materialConvert')
 
 const videoThumb = (id) => path.join(MATERIALS_DIR, 'videos', `${id}.jpg`)
@@ -114,6 +117,8 @@ async function cleanup() {
     const videos = await MaterialVideo.find({ courseId: { $in: ids } }).select('_id')
     for (const v of videos) await fs.promises.rm(videoThumb(v._id), { force: true })
     await MaterialVideoProgress.deleteMany({ courseId: { $in: ids } })
+    await MaterialExercise.deleteMany({ courseId: { $in: ids } })
+    await MaterialExerciseAttempt.deleteMany({ courseId: { $in: ids } })
     await MaterialVideo.deleteMany({ courseId: { $in: ids } })
     await MaterialCourse.deleteMany({ _id: { $in: ids } })
     await Student.deleteMany({ phone: { $in: Object.values(PHONES) } })
@@ -462,14 +467,33 @@ async function main() {
         r = await api('GET', `/materials/videos/${video._id}/thumb`, { token: tYes })
         check('ảnh bìa qua máy chủ, cấm cache', [r.status, r.headers.get('content-type'), r.headers.get('cache-control')], [200, 'image/jpeg', 'private, no-store'])
 
-        r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tYes, body: { position: 1200, duration: 3600 } })
-        check('lưu chỗ đang xem: 1200s = 33%', [r.status, r.body.position, r.body.percent, r.body.completed], [200, 1200, 33, false])
-        r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tYes, body: { position: 300, duration: 3600 } })
-        check('tua lại -> chỗ dừng đổi, % giữ theo chỗ xa nhất', [r.body.position, r.body.percent], [300, 33])
-        r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tYes, body: { position: 99999, duration: 3600 } })
-        check('vị trí vượt thời lượng -> kẹp lại, xem >= 90% là xong', [r.body.position, r.body.percent, r.body.completed], [3600, 100, true])
+        // Thời lượng ĐÃ THỰC SỰ PHÁT: trình phát gửi các đoạn vừa phát.
+        const prog = (body, token = tYes, id = video._id) => api('PUT', `/materials/videos/${id}/progress`, { token, body })
+        // Giả như thời gian thực đã trôi qua `sec` giây từ lần báo trước.
+        const ago = (sec, id = video._id) =>
+            MaterialVideoProgress.updateOne({ student: yes._id, video: id }, { $set: { lastReportAt: new Date(Date.now() - sec * 1000) } })
+        r = await prog({ position: 10, duration: 3600, segments: [[0, 10]] })
+        check('báo đoạn vừa phát -> cộng 10 giây đã xem', [r.status, r.body.position, r.body.watchedSec, r.body.completed], [200, 10, 10, false])
+        r = await prog({ position: 3599, duration: 3600, segments: [] })
+        check('TUA một phát tới cuối -> chỗ dừng đổi, KHÔNG cộng giây nào, chưa xong', [r.body.position, r.body.watchedSec, r.body.completed], [3599, 10, false])
+        r = await prog({ position: 3600, duration: 3600, segments: [[10, 3600]] })
+        check('gửi khống "đã xem cả video" ngay -> chỉ được cộng vài chục giây', [r.body.watchedSec <= 10 + 15 + 1, r.body.completed], [true, false])
+        await ago(600)
+        r = await prog({ position: 1200, duration: 3600, segments: [[600, 1200]] })
+        const afterTen = r.body.watchedSec
+        check('10 phút thực trôi qua -> cộng được đoạn 10 phút', afterTen >= 600 + 10, true)
+        await ago(600)
+        r = await prog({ position: 900, duration: 3600, segments: [[600, 900]] })
+        check('xem lại đoạn đã xem -> không cộng lần hai', r.body.watchedSec, afterTen)
+        await ago(3600)
+        r = await prog({ position: 3300, duration: 3600, segments: [[0, 3300]] })
+        check('đã xem 3300/3600 giây (91%) -> chưa đủ 95%', [r.body.completed, r.body.percent], [false, 91])
+        await ago(600)
+        r = await prog({ position: 3600, duration: 3600, segments: [[3300, 3480]] })
+        check('xem tới 3480/3600 (96,7%) -> xem xong', [r.body.completed, r.body.percent], [true, 100])
+        check('...trả các đoạn đã xem để tô lên thanh tua', Array.isArray(r.body.watched) && r.body.watched.length >= 1, true)
         r = await api('GET', `/materials/videos/${video._id}`, { token: tYes })
-        check('mở lại -> có chỗ đang xem để phát tiếp', r.body.progress.position, 3600)
+        check('mở lại -> có chỗ đang xem + các đoạn đã xem', [r.body.progress.position, r.body.progress.completed, Array.isArray(r.body.progress.watched)], [3600, true, true])
         r = await api('PUT', `/materials/videos/${v2._id}/progress`, { token: tYes, body: { position: 60, duration: 1805.4 } })
         r = await api('GET', `/admin/materials/videos?courseId=${course._id}`, { token: A })
         check('thời lượng còn thiếu -> lấy theo trình phát báo về', r.body.find((v) => v._id === v2._id).durationSec, 1805)
@@ -478,6 +502,225 @@ async function main() {
         check('học viên chưa có quyền -> 403', [r.status, r.body.code], [403, 'MATERIAL_NO_ACCESS'])
         r = await api('PUT', `/materials/videos/${video._id}/progress`, { token: tNo, body: { position: 10 } })
         check('...lưu tiến độ cũng 403', r.status, 403)
+
+        // ---------- BÀI TẬP SAU VIDEO ----------
+        console.log('\nBÀI TẬP CỦA KHOÁ (xem hết mọi video mới làm)')
+        const exAdmin = `/admin/materials/courses/${course._id}/exercise`
+        const exStudent = `/materials/courses/${SLUG}hsk3/exercise`
+        r = await api('GET', exAdmin, { token: A })
+        check('khoá chưa có bài tập -> đề rỗng, khoá có 2 video', [r.status, r.body.sections, r.body.videoCount], [200, [], 2])
+        r = await api('GET', exStudent, { token: tYes })
+        check('học viên mở bài tập khi khoá chưa có đề -> 404 NO_EXERCISE', [r.status, r.body.code], [404, 'NO_EXERCISE'])
+        r = await api('PUT', exAdmin, {
+            token: A,
+            body: { sections: [{ type: 'word_bank', words: '家人 小学生', items: [{ text: '我想和___一起去吃饭。', answers: [] }] }] },
+        })
+        check('đề thiếu đáp án -> 400 chỉ rõ phần, câu', [r.status, /Phần 1, câu 1/.test(r.body.message)], [400, true])
+        const sections = [
+            {
+                type: 'word_bank',
+                words: '家人  小学生、有的 有些',
+                items: [
+                    { text: '今天是星期日，我想和_____一起去吃饭。', answers: ['家人'], explain: '今天是星期日，我想和家人一起去吃饭。\nHôm nay là Chủ nhật…' },
+                    { text: '男：___ 学生喜欢看书，___ 喜欢玩儿。\n女：你呢？', answers: ['有的/有些', '有的/有些'], explain: '有些学生喜欢看书，有些喜欢玩儿。' },
+                ],
+            },
+            { type: 'pinyin', items: [{ pinyin: 'bāozi', text: '我们早上吃____，好吗？', answers: ['包子'], explain: '我们早上吃包子，好吗？' }] },
+            {
+                type: 'sentence',
+                items: [
+                    { word: '饺子', sample: '我妈妈做的饺子很好吃。' },
+                    { word: '好听', sample: '这个名字很好听。' },
+                ],
+            },
+        ]
+        r = await api('PUT', exAdmin, { token: A, body: { sections } })
+        check('lưu đề 3 phần -> 5 câu, tiêu đề mặc định theo dạng',
+            [r.status, r.body.exerciseCount, r.body.sections[1].title.startsWith('根据所给的拼音写汉字'), r.body.sections[0].words],
+            [200, 5, true, ['家人', '小学生', '有的', '有些']])
+        r = await api('GET', '/admin/materials/courses', { token: A })
+        check('danh sách khoá admin: số câu bài tập', r.body.find((c) => c._id === course._id).exerciseCount, 5)
+
+        // Mới xem đủ 1/2 video -> bài tập của khoá vẫn khoá
+        r = await api('GET', exStudent, { token: tYes })
+        check('mới xem đủ 1/2 video -> 403 VIDEO_NOT_WATCHED, nói rõ 1/2', [r.status, r.body.code, /1\/2 video/.test(r.body.message)], [403, 'VIDEO_NOT_WATCHED', true])
+        r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers: {} } })
+        check('...nộp thẳng qua API cũng bị chặn', [r.status, r.body.code], [403, 'VIDEO_NOT_WATCHED'])
+        r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
+        check('trang khoá: bài tập 5 câu, đã xem đủ 1/2 video, chưa mở',
+            r.body.exercise, { itemCount: 5, totalVideos: 2, watchedVideos: 1, unlocked: false, last: null })
+        r = await api('GET', `/materials/videos/${video._id}`, { token: tYes })
+        check('trang video cũng báo tình trạng bài tập CỦA KHOÁ', [r.body.exercise.watchedVideos, r.body.exercise.unlocked], [1, false])
+
+        // Xem nốt video thứ hai -> mở
+        await ago(3600, v2._id)
+        r = await prog({ position: 1805, duration: 1805, segments: [[0, 1805]] }, tYes, v2._id)
+        check('xem hết video 2 -> xem xong', r.body.completed, true)
+
+        r = await api('GET', exStudent, { token: tYes })
+        const ex = r.body
+        check('đã xem đủ -> mở được đề, chưa có lượt làm', [r.status, ex.sections.length, ex.lastAttempt], [200, 3, null])
+        check('đề gửi học viên KHÔNG có đáp án, lời giải, câu mẫu',
+            ['家人一起', '包子', '妈妈做的', 'answers', 'explain', 'sample'].some((x) => JSON.stringify(ex.sections).includes(x)), false)
+        check('...nhưng có ô từ, pinyin, số chỗ trống', [ex.sections[0].words.length, ex.sections[1].items[0].pinyin, ex.sections[0].items[1].blanks], [4, 'bāozi', 2])
+        r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
+        check('trang khoá: đã xem đủ 2/2 -> mở bài tập', [r.body.exercise.watchedVideos, r.body.exercise.unlocked], [2, true])
+
+        const [s1, s2, s3] = ex.sections
+        const answers = {
+            [s1.items[0].id]: ['  家人 '], // thừa khoảng trắng vẫn đúng
+            [s1.items[1].id]: ['有些', '有的'], // đáp án ghi "有的/有些" -> nhận cả hai
+            [s2.items[0].id]: ['包 子'],
+            [s3.items[0].id]: '我喜欢吃饺子。',
+            [s3.items[1].id]: '',
+            hack: 'bỏ qua',
+        }
+        delete process.env.ANTHROPIC_API_KEY
+        r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers } })
+        check('nộp bài: chấm tự động 4/4 chỗ trống (bỏ khoảng trắng, nhận đáp án thay thế)', [r.status, r.body.autoCorrect, r.body.autoTotal], [201, 4, 4])
+        check('chưa cài khoá AI -> phần đặt câu "unavailable", vẫn có câu mẫu để tự so',
+            [r.body.ai.status, r.body.sections[2].items[0].sample], ['unavailable', '我妈妈做的饺子很好吃。'])
+        check('kết quả kèm đáp án + lời giải', [r.body.sections[0].items[0].answers, Boolean(r.body.sections[0].items[0].explain)], [['家人'], true])
+        check('không lưu dữ liệu lạ trình duyệt gửi', 'hack' in r.body.answers, false)
+        r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers } })
+        check('nộp liên tục -> 429', r.status, 429)
+
+        // ---- AI chấm (máy chủ Anthropic giả) ----
+        let aiMode = 'ok'
+        let aiReq = null
+        const ai = http.createServer((q, s) => {
+            let raw = ''
+            q.on('data', (c) => (raw += c))
+            q.on('end', () => {
+                aiReq = { headers: q.headers, body: JSON.parse(raw || '{}'), path: q.url }
+                // Model kiểu Opus 5.5: không nhận tool_choice ép, trả lời bằng chữ có JSON.
+                if (aiReq.body.model === 'claude-test-noforce') {
+                    if (aiReq.body.tool_choice?.type === 'tool') {
+                        s.writeHead(400, { 'Content-Type': 'application/json' })
+                        return s.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'tool_choice: type "tool" and "any" are not supported for this model.' } }))
+                    }
+                    const ids = [...JSON.stringify(aiReq.body).matchAll(/\(id: ([a-z0-9]+)\)/g)].map((m) => m[1])
+                    s.writeHead(200, { 'Content-Type': 'application/json' })
+                    return s.end(JSON.stringify({
+                        model: 'claude-test-noforce',
+                        content: [{ type: 'text', text: 'Kết quả: ' + JSON.stringify({ items: ids.map((id) => ({ id, verdict: 'gan_dat', comment: 'ok', corrected: '我喜欢吃饺子。' })) }) }],
+                    }))
+                }
+                if (aiMode === 'down') {
+                    s.writeHead(529, { 'Content-Type': 'application/json' })
+                    return s.end(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }))
+                }
+                const ids = [...JSON.stringify(aiReq.body).matchAll(/\(id: ([a-z0-9]+)\)/g)].map((m) => m[1])
+                s.writeHead(200, { 'Content-Type': 'application/json' })
+                s.end(JSON.stringify({
+                    model: 'claude-test',
+                    content: [{ type: 'tool_use', name: 'ket_qua_cham', input: { items: ids.map((id) => ({ id, verdict: 'dat', comment: 'Câu đúng, tự nhiên.', corrected: '我喜欢吃饺子。' })) } }],
+                }))
+            })
+        })
+        await new Promise((ok) => ai.listen(0, '127.0.0.1', ok))
+        process.env.ANTHROPIC_API_KEY = 'test-key'
+        process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${ai.address().port}`
+        // Ghi thẳng collection: Mongoose không cho sửa createdAt qua model.
+        const backdate = () => MaterialExerciseAttempt.collection.updateMany({ student: yes._id }, { $set: { createdAt: new Date(Date.now() - 60000) } })
+        try {
+            await backdate()
+            r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers } })
+            const sent = JSON.stringify(aiReq.body)
+            check('AI chấm: gọi đúng API (khoá, phiên bản, ép trả qua công cụ)',
+                [aiReq.path, aiReq.headers['x-api-key'], aiReq.headers['anthropic-version'], aiReq.body.tool_choice?.name], ['/v1/messages', 'test-key', '2023-06-01', 'ket_qua_cham'])
+            check('...câu bỏ trống không gửi AI, tự chấm "chưa đạt"',
+                [(sent.match(/\(id: /g) || []).length, r.body.results[s3.items[1].id].verdict], [1, 'chua_dat'])
+            check('...KHÔNG gửi tên / SĐT học viên sang AI', [sent.includes('Smoke'), sent.includes(PHONES.yes)], [false, false])
+            check('...kết quả: đạt 1/2, có nhận xét + câu sửa',
+                [r.body.ai.status, r.body.ai.passed, r.body.ai.total, r.body.results[s3.items[0].id].comment], ['done', 1, 2, 'Câu đúng, tự nhiên.'])
+
+            aiMode = 'down'
+            await backdate()
+            r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers } })
+            check('AI lỗi -> vẫn lưu bài, phần tự động vẫn chấm, báo lỗi AI', [r.status, r.body.autoCorrect, r.body.ai.status, /529/.test(r.body.ai.error)], [201, 4, 'error', true])
+            aiMode = 'ok'
+            r = await api('POST', `/materials/exercise-attempts/${r.body._id}/regrade`, { token: tYes })
+            check('bấm chấm lại -> AI chấm xong', [r.status, r.body.ai.status, r.body.ai.passed], [200, 'done', 1])
+            r = await api('POST', `/materials/exercise-attempts/${r.body._id}/regrade`, { token: tNo })
+            check('chấm lại bài của người khác -> 404', r.status, 404)
+
+            // ---- Cấu hình AI chấm (admin sửa hướng dẫn trên web) ----
+            // Giữ nguyên cấu hình thật trong DB: chụp lại, cuối phần trả về như cũ.
+            const AI_KEYS = ['ai_grading_rubric', 'ai_grading_model']
+            const savedSettings = await AppSetting.find({ key: { $in: AI_KEYS } }).lean()
+            try {
+                await AppSetting.deleteMany({ key: { $in: AI_KEYS } })
+                r = await api('GET', '/admin/materials/ai-grading', { token: A })
+                check('cấu hình AI: mặc định, có model, báo đã cài khoá',
+                    [r.status, r.body.isDefault, r.body.rubric === r.body.defaultRubric, Boolean(r.body.model), r.body.configured], [200, true, true, true, true])
+                check('...hướng dẫn mặc định có các quyết định đã chốt (xưng "bạn", 早上好 = gần đạt, pinyin = chưa đạt)',
+                    [/xưng "bạn"/.test(r.body.rubric), /早上好/.test(r.body.rubric), /pinyin/.test(r.body.rubric)], [true, true, true])
+                r = await api('PUT', '/admin/materials/ai-grading', { token: A, body: { rubric: 'HƯỚNG DẪN THỬ: chấm thật khắt khe.' } })
+                check('admin lưu hướng dẫn mới -> không còn là bản mặc định', [r.status, r.body.isDefault], [200, false])
+                await backdate()
+                r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers } })
+                check('bài nộp sau đó chấm theo hướng dẫn mới + phần quy tắc cố định, không gửi temperature',
+                    [aiReq.body.system.startsWith('HƯỚNG DẪN THỬ'), /ket_qua_cham/.test(aiReq.body.system), /<<< và >>>/.test(aiReq.body.system), 'temperature' in aiReq.body],
+                    [true, true, true, false])
+                r = await api('POST', '/admin/materials/ai-grading/test', {
+                    token: A,
+                    body: { rubric: 'BẢN NHÁP CHƯA LƯU', items: [{ word: '饺子', answer: '我喜欢吃饺子。' }, { word: '', answer: 'bỏ qua' }] },
+                })
+                check('chấm thử: dùng bản nháp chưa lưu, bỏ dòng chưa có từ',
+                    [r.status, aiReq.body.system.startsWith('BẢN NHÁP CHƯA LƯU'), r.body.items.length, r.body.items[0].verdict], [200, true, 1, 'dat'])
+                r = await api('POST', '/admin/materials/ai-grading/test', { token: tYes, body: { items: [{ word: '饺子', answer: 'x' }] } })
+                check('học viên gọi chấm thử -> 401', r.status, 401)
+                r = await api('PUT', '/admin/materials/ai-grading', { token: A, body: { rubric: 'x'.repeat(9000) } })
+                check('hướng dẫn quá dài -> 400', r.status, 400)
+                r = await api('PUT', '/admin/materials/ai-grading', { token: A, body: { rubric: '' } })
+                check('xoá trắng -> quay về bản mặc định', r.body.isDefault, true)
+
+                // ---- Chọn model ----
+                r = await api('GET', '/admin/materials/ai-grading', { token: A })
+                const defaultModel = r.body.defaultModel
+                check('model: chưa chọn -> dùng model mặc định, có danh sách gợi ý',
+                    [r.body.model === defaultModel, r.body.modelSource !== 'admin', r.body.modelOptions.some((o) => o.id === 'claude-haiku-4-5-20251001')], [true, true, true])
+                r = await api('PUT', '/admin/materials/ai-grading', { token: A, body: { model: 'claude-haiku-4-5-20251001' } })
+                check('admin chọn Haiku -> lưu, nguồn "admin", hướng dẫn chấm không đổi', [r.status, r.body.model, r.body.modelSource, r.body.isDefault], [200, 'claude-haiku-4-5-20251001', 'admin', true])
+                await backdate()
+                r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers } })
+                check('bài nộp sau đó chấm bằng model đã chọn', aiReq.body.model, 'claude-haiku-4-5-20251001')
+                r = await api('POST', '/admin/materials/ai-grading/test', { token: A, body: { model: 'claude-opus-5-5', items: [{ word: '饺子', answer: '我喜欢吃饺子。' }] } })
+                check('chấm thử với model khác (chưa lưu)', [r.status, aiReq.body.model], [200, 'claude-opus-5-5'])
+                r = await api('POST', '/admin/materials/ai-grading/test', { token: A, body: { model: 'claude-test-noforce', items: [{ word: '饺子', answer: '我喜欢吃饺子。' }] } })
+                check('model không nhận tool_choice ép -> tự gọi lại kiểu "auto", đọc JSON trong câu trả lời',
+                    [r.status, r.body.items[0]?.verdict, aiReq.body.tool_choice?.type], [200, 'gan_dat', 'auto'])
+                r = await api('POST', '/admin/materials/ai-grading/test', { token: A, body: { model: 'claude-test-noforce', items: [{ word: '饺子', answer: '我喜欢吃饺子。' }] } })
+                check('...lần sau nhớ luôn, gọi thẳng kiểu "auto"', [r.status, aiReq.body.tool_choice?.type], [200, 'auto'])
+                r = await api('PUT', '/admin/materials/ai-grading', { token: A, body: { model: 'gpt-4o; rm -rf' } })
+                check('mã model lạ -> 400', r.status, 400)
+                r = await api('POST', '/admin/materials/ai-grading/test', { token: A, body: { model: 'bad model', items: [{ word: '饺子', answer: 'x' }] } })
+                check('chấm thử với mã model lạ -> 400', r.status, 400)
+                r = await api('PUT', '/admin/materials/ai-grading', { token: A, body: { model: '' } })
+                check('bỏ chọn -> quay về model mặc định', [r.body.model, r.body.modelSource !== 'admin'], [defaultModel, true])
+            } finally {
+                await AppSetting.deleteMany({ key: { $in: AI_KEYS } })
+                for (const x of savedSettings) await AppSetting.create({ key: x.key, value: x.value, updatedBy: x.updatedBy })
+            }
+
+            process.env.AI_GRADE_DAILY_LIMIT = '2'
+            await backdate()
+            r = await api('POST', `${exStudent}/attempts`, { token: tYes, body: { answers } })
+            check('hết lượt AI trong ngày -> "limited", phần tự động vẫn chấm', [r.body.ai.status, r.body.autoCorrect], ['limited', 4])
+            delete process.env.AI_GRADE_DAILY_LIMIT
+        } finally {
+            ai.close()
+            delete process.env.ANTHROPIC_API_KEY
+            delete process.env.ANTHROPIC_BASE_URL
+        }
+
+        r = await api('GET', exStudent, { token: tYes })
+        check('mở lại bài tập -> có kết quả lượt gần nhất + số lượt', [Boolean(r.body.lastAttempt), r.body.attemptCount], [true, 6])
+        r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
+        check('trang khoá: tóm tắt điểm lượt gần nhất', r.body.exercise.last.autoCorrect, 4)
+        r = await api('GET', exStudent, { token: tNo })
+        check('học viên không có quyền khoá -> 403', [r.status, r.body.code], [403, 'MATERIAL_NO_ACCESS'])
         r = await api('GET', `/materials/videos/${video._id}/thumb`)
         check('không đăng nhập -> 401', r.status, 401)
         await api('PUT', `/admin/materials/videos/${v2._id}`, { token: A, body: { status: 'draft' } })
@@ -489,8 +732,9 @@ async function main() {
             [r.status, r.body.title, r.body.youtubeId, await MaterialVideoProgress.countDocuments({ video: video._id })],
             [200, 'Bài 1 — Chào hỏi (video)', 'VIDEONEW001', 0])
         r = await api('DELETE', `/admin/materials/videos/${v2._id}`, { token: A })
-        check('xoá video -> xoá cả ảnh bìa + tiến độ',
-            [r.status, fs.existsSync(videoThumb(v2._id)), await MaterialVideoProgress.countDocuments({ video: v2._id })], [200, false, 0])
+        check('xoá video -> xoá ảnh bìa + tiến độ, bài tập CỦA KHOÁ vẫn còn',
+            [r.status, fs.existsSync(videoThumb(v2._id)), await MaterialVideoProgress.countDocuments({ video: v2._id }), await MaterialExercise.countDocuments({ courseId: course._id })],
+            [200, false, 0, 1])
     } finally {
         yt.close()
     }
@@ -504,7 +748,9 @@ async function main() {
     r = await api('DELETE', `/admin/materials/courses/${course._id}?force=1`, { token: A })
     check('xoá hẳn -> gỡ luôn quyền của học viên', [r.status, (await Student.findById(yes._id)).materialAccess.length], [200, 0])
     check('...và file của mọi bộ slide', fs.existsSync(deckDir(deck._id)), false)
-    check('...và video + ảnh bìa', [await MaterialVideo.countDocuments({ courseId: course._id }), fs.existsSync(videoThumb(video._id))], [0, false])
+    check('...và video + ảnh bìa + bài tập + bài làm',
+        [await MaterialVideo.countDocuments({ courseId: course._id }), fs.existsSync(videoThumb(video._id)), await MaterialExercise.countDocuments({ courseId: course._id }), await MaterialExerciseAttempt.countDocuments({ courseId: course._id })],
+        [0, false, 0, 0])
 
     console.log('\nQUYỀN')
     r = await api('GET', '/admin/materials/courses', { token: tYes })

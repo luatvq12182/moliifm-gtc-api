@@ -1,6 +1,7 @@
 const express = require('express')
 const c = require('../controllers/materialAdminController')
 const v = require('../controllers/materialVideoAdminController')
+const ai = require('../controllers/aiGradingAdminController')
 const { protectAdmin } = require('../middleware/auth')
 
 // Học liệu khoá học — phía quản trị.
@@ -11,6 +12,8 @@ router.get('/courses', c.listCourses)
 router.post('/courses', c.createCourse)
 router.put('/courses/:id', c.updateCourse)
 router.delete('/courses/:id', c.deleteCourse)
+router.get('/courses/:id/exercise', c.getCourseExercise)
+router.put('/courses/:id/exercise', c.saveCourseExercise)
 
 router.get('/decks', c.listDecks)
 router.post('/decks', c.createDeck)
@@ -31,6 +34,10 @@ router.put('/videos/reorder', v.reorderVideos)
 router.put('/videos/:id', v.updateVideo)
 router.delete('/videos/:id', v.deleteVideo)
 router.get('/videos/:id/thumb', v.getVideoThumb)
+
+router.get('/ai-grading', ai.getAiGrading)
+router.put('/ai-grading', ai.saveAiGrading)
+router.post('/ai-grading/test', ai.testAiGrading)
 
 router.get('/access', c.listAccess)
 router.patch('/access', c.updateAccess)
