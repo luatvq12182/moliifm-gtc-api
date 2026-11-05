@@ -7,6 +7,9 @@ const {
     getMyVideo,
     getMyVideoThumb,
     saveMyVideoProgress,
+    getMyExercise,
+    submitMyExercise,
+    regradeMyAttempt,
 } = require('../controllers/materialController')
 const { protectStudent } = require('../middleware/auth')
 
@@ -21,5 +24,8 @@ router.get('/decks/:id/pages/:n', getMyDeckPage)
 router.get('/videos/:id', getMyVideo)
 router.get('/videos/:id/thumb', getMyVideoThumb)
 router.put('/videos/:id/progress', saveMyVideoProgress)
+router.get('/courses/:slug/exercise', getMyExercise)
+router.post('/courses/:slug/exercise/attempts', submitMyExercise)
+router.post('/exercise-attempts/:id/regrade', regradeMyAttempt)
 
 module.exports = router
