@@ -410,10 +410,11 @@ async function main() {
 
     // ---------- VIDEO BÀI GIẢNG ----------
     console.log('\nVIDEO BÀI GIẢNG (YouTube giả)')
+    let lateThumbReady = false // video vừa đăng: YouTube chưa có ảnh bìa
     const yt = http.createServer((q, s) => {
         const u = new URL(q.url, 'http://x')
         const vid = (u.searchParams.get('url') || '').split('v=')[1] || u.searchParams.get('v')
-        const known = { VIDEOOK0001: 'Bài 1 — Chào hỏi (video)', VIDEONODUR1: 'Bài 2 — Số đếm', VIDEONEW001: 'Bài 1 — bản sửa' }
+        const known = { VIDEOOK0001: 'Bài 1 — Chào hỏi (video)', VIDEONODUR1: 'Bài 2 — Số đếm', VIDEONEW001: 'Bài 1 — bản sửa', VIDEOCURR01: 'Giáo trình — Bài 1', VIDEOLATE01: 'Video vừa đăng' }
         if (u.pathname === '/oembed') {
             if (!known[vid]) { s.writeHead(404); return s.end('Not Found') }
             s.writeHead(200, { 'Content-Type': 'application/json' })
@@ -424,6 +425,23 @@ async function main() {
             return s.end(vid === 'VIDEONODUR1' ? '<html>đổi giao diện</html>' : '<html>..."lengthSeconds":"3600",...</html>')
         }
         // Ảnh bìa: chỉ có cỡ hqdefault (giống nhiều video thật không có maxres).
+        if (u.pathname === '/playlist') {
+            // Trang danh sách phát: trộn kiểu mới (lockupViewModel) và kiểu cũ (playlistVideoRenderer)
+            if (u.searchParams.get('list') !== 'PLSMOKE00001') { s.writeHead(200, { 'Content-Type': 'text/html' }); return s.end('<html>không có</html>') }
+            const lockup = (id, title, len) => ({ lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: id,
+                contentImage: { thumbnailViewModel: { overlays: [{ thumbnailBottomOverlayViewModel: { badges: [{ thumbnailBadgeViewModel: { text: len } }] } }] } },
+                metadata: { lockupMetadataViewModel: { title: { content: title } } } } })
+            const data = { metadata: { playlistMetadataRenderer: { title: 'HSK1 — theo giáo trình' } }, contents: { list: [
+                lockup('VIDPL000001', 'HSK1 Bài 1', '21:04'),
+                { playlistVideoRenderer: { videoId: 'VIDPL000002', title: { runs: [{ text: 'HSK1 Bài 2' }] }, lengthSeconds: '1805', isPlayable: true } },
+                lockup('VIDEOOK0001', 'Video đã có trong khoá', '1:00:00'),
+                { playlistVideoRenderer: { videoId: 'VIDPL000003', title: { simpleText: '[Private video]' }, isPlayable: false } },
+                lockup('VIDPL000004', 'HSK1 Bài 3', '1:02:03'),
+            ] } }
+            s.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+            return s.end(`<html><script>var ytInitialData = ${JSON.stringify(data)};</script></html>`)
+        }
+        if (/VIDEOLATE01/.test(u.pathname) && !lateThumbReady) { s.writeHead(404); return s.end() }
         if (/\/hqdefault\.jpg$/.test(u.pathname)) {
             s.writeHead(200, { 'Content-Type': 'image/jpeg' })
             return s.end(Buffer.alloc(4000, 0xff))
@@ -435,6 +453,7 @@ async function main() {
     process.env.YOUTUBE_OEMBED_BASE = ytBase + '/oembed'
     process.env.YOUTUBE_WATCH_BASE = ytBase + '/watch'
     process.env.YOUTUBE_THUMB_BASE = ytBase + '/vi'
+    process.env.YOUTUBE_PLAYLIST_BASE = ytBase + '/playlist'
     let video
     try {
         r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'https://example.com/v.mp4' } })
@@ -565,6 +584,50 @@ async function main() {
         check('...nhưng có ô từ, pinyin, số chỗ trống', [ex.sections[0].words.length, ex.sections[1].items[0].pinyin, ex.sections[0].items[1].blanks], [4, 'bāozi', 2])
         r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
         check('trang khoá: đã xem đủ 2/2 -> mở bài tập', [r.body.exercise.watchedVideos, r.body.exercise.unlocked], [2, true])
+
+        // Video "theo giáo trình": chỉ để xem, KHÔNG tính vào điều kiện mở bài tập
+        r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'https://youtu.be/VIDEOCURR01', status: 'published', group: 'curriculum' } })
+        const vCur = r.body
+        check('thêm video nhóm "theo giáo trình"', [r.status, vCur.group], [201, 'curriculum'])
+        r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
+        check('...học viên thấy nhóm của từng video; video giáo trình chưa xem KHÔNG khoá lại bài tập',
+            [r.body.videos.find((v) => v._id === vCur._id)?.group, r.body.videos.find((v) => v._id === video._id)?.group, r.body.exercise.totalVideos, r.body.exercise.unlocked],
+            ['curriculum', 'supplement', 2, true])
+        r = await api('GET', exAdmin, { token: A })
+        check('...trang soạn bài tập chỉ đếm video nhóm bổ sung', r.body.videoCount, 2)
+        r = await api('PUT', `/admin/materials/videos/${vCur._id}`, { token: A, body: { group: 'supplement' } })
+        r = await api('GET', `/materials/courses/${SLUG}hsk3`, { token: tYes })
+        check('chuyển video đó sang nhóm bổ sung -> bài tập khoá lại (2/3)', [r.body.exercise.watchedVideos, r.body.exercise.totalVideos, r.body.exercise.unlocked], [2, 3, false])
+        await api('DELETE', `/admin/materials/videos/${vCur._id}`, { token: A })
+
+        // Video vừa đăng: lúc thêm chưa có ảnh bìa -> mở danh sách admin sau đó thì tự lấy lại
+        r = await api('POST', '/admin/materials/videos', { token: A, body: { courseId: course._id, url: 'https://youtu.be/VIDEOLATE01', group: 'curriculum' } })
+        const vLate = r.body
+        check('thêm video lúc YouTube chưa có ảnh bìa -> chưa có ảnh', [r.status, vLate.hasThumb], [201, false])
+        lateThumbReady = true
+        r = await api('GET', `/admin/materials/videos?courseId=${course._id}`, { token: A })
+        check('...mở danh sách admin sau đó -> tự lấy lại được ảnh bìa', r.body.find((v) => v._id === vLate._id).hasThumb, true)
+        await api('DELETE', `/admin/materials/videos/${vLate._id}`, { token: A })
+
+        // ---- Nhập cả danh sách phát ----
+        r = await api('POST', '/admin/materials/videos/playlist', { token: A, body: { courseId: course._id, url: 'https://youtu.be/VIDEOOK0001' } })
+        check('link không có list= -> 400', [r.status, /danh sách phát/.test(r.body.message)], [400, true])
+        r = await api('POST', '/admin/materials/videos/playlist', { token: A, body: { courseId: course._id, url: 'https://www.youtube.com/playlist?list=PLKHONGCO0001' } })
+        check('danh sách không đọc được (riêng tư / sai) -> 400 kèm hướng dẫn', [r.status, /Không công khai/.test(r.body.message)], [400, true])
+        r = await api('POST', '/admin/materials/videos/playlist', {
+            token: A,
+            body: { courseId: course._id, url: 'https://www.youtube.com/watch?v=VIDPL000001&list=PLSMOKE00001&index=1', group: 'curriculum', status: 'published' },
+        })
+        check('nhập danh sách phát: 3 video mới, bỏ qua video đã có + video riêng tư',
+            [r.status, r.body.playlistTitle, r.body.created, r.body.skipped.map((x) => x.reason).sort()], [201, 'HSK1 — theo giáo trình', 3, ['riêng tư / đã xoá', 'đã có trong khoá']])
+        r = await api('GET', `/admin/materials/videos?courseId=${course._id}`, { token: A })
+        const imported = r.body.filter((v) => v.youtubeId.startsWith('VIDPL'))
+        check('...đúng thứ tự, đúng nhóm, tên + thời lượng từ danh sách, có ảnh bìa',
+            imported.map((v) => [v.title, v.durationSec, v.group, v.status, v.hasThumb]),
+            [['HSK1 Bài 1', 1264, 'curriculum', 'published', true], ['HSK1 Bài 2', 1805, 'curriculum', 'published', true], ['HSK1 Bài 3', 3723, 'curriculum', 'published', true]])
+        r = await api('POST', '/admin/materials/videos/playlist', { token: A, body: { courseId: course._id, url: 'https://www.youtube.com/playlist?list=PLSMOKE00001', group: 'curriculum' } })
+        check('nhập lại cùng danh sách -> không tạo trùng', [r.status, r.body.created], [201, 0])
+        for (const v of imported) await api('DELETE', `/admin/materials/videos/${v._id}`, { token: A })
 
         const [s1, s2, s3] = ex.sections
         const answers = {

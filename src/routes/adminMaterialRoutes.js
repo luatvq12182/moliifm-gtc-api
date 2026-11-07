@@ -30,6 +30,7 @@ router.get('/decks/:id/pages/:n', c.getDeckPage)
 
 router.get('/videos', v.listVideos)
 router.post('/videos', v.createVideo)
+router.post('/videos/playlist', v.importPlaylist)
 router.put('/videos/reorder', v.reorderVideos)
 router.put('/videos/:id', v.updateVideo)
 router.delete('/videos/:id', v.deleteVideo)

@@ -19,6 +19,7 @@ const { MATERIALS_DIR } = require('./materialConvert')
 const oembedBase = () => process.env.YOUTUBE_OEMBED_BASE || 'https://www.youtube.com/oembed'
 const watchBase = () => process.env.YOUTUBE_WATCH_BASE || 'https://www.youtube.com/watch'
 const thumbBase = () => process.env.YOUTUBE_THUMB_BASE || 'https://i.ytimg.com/vi'
+const playlistBase = () => process.env.YOUTUBE_PLAYLIST_BASE || 'https://www.youtube.com/playlist'
 
 const VIDEOS_DIR = path.join(MATERIALS_DIR, 'videos')
 const ID_RE = /^[a-zA-Z0-9_-]{11}$/
@@ -52,6 +53,96 @@ function parseYouTubeId(input) {
         }
     }
     return id && ID_RE.test(id) ? id : null
+}
+
+// ---------- danh sách phát ----------
+
+const LIST_RE = /^[A-Za-z0-9_-]{10,64}$/
+const timeToSec = (t) => (/^\d{1,2}(:\d{2}){1,2}$/.test(String(t || '')) ? String(t).split(':').reduce((a, x) => a * 60 + Number(x), 0) : 0)
+const UNAVAILABLE_TITLE = /^\[(private video|deleted video|video riêng tư|video đã bị xoá|video đã bị xóa)\]$/i
+
+/**
+ * Mã danh sách phát từ link YouTube (youtube.com/playlist?list=…, hoặc link
+ * một video có kèm &list=…), hoặc null. Bỏ qua danh sách riêng của tài khoản
+ * (WL = Xem sau, LL = Video đã thích) — không mở được từ máy chủ.
+ */
+function parsePlaylistId(input) {
+    const raw = String(input || '').trim()
+    let url
+    try {
+        url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
+    } catch {
+        return null
+    }
+    const host = url.hostname.toLowerCase().replace(/^(www|m|music)\./, '')
+    if (host !== 'youtube.com' && host !== 'youtu.be') return null
+    const id = url.searchParams.get('list')
+    return id && LIST_RE.test(id) && !['WL', 'LL'].includes(id) ? id : null
+}
+
+/**
+ * Đọc danh sách phát CÔNG KHAI / KHÔNG CÔNG KHAI từ trang của YouTube (không cần
+ * khoá API). Trả { title, items: [{ id, title, durationSec, unavailable }], hasMore }.
+ * Trang đầu của YouTube có tối đa ~100 video; `hasMore` = danh sách dài hơn thế.
+ */
+async function fetchPlaylist(listId) {
+    let res
+    try {
+        res = await fetch(`${playlistBase()}?list=${encodeURIComponent(listId)}`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
+                'Accept-Language': 'vi,en;q=0.8',
+            },
+            signal: AbortSignal.timeout(20000),
+        })
+    } catch {
+        throw new Error('Máy chủ không kết nối được YouTube. Thử lại sau ít phút.')
+    }
+    const html = res.ok ? await res.text() : ''
+    const m = html.match(/var ytInitialData = (\{.*?\});<\/script>/s)
+    let data = null
+    try {
+        data = m ? JSON.parse(m[1]) : null
+    } catch {
+        data = null
+    }
+    if (!data) throw new Error('Không đọc được danh sách phát. Kiểm tra lại link, và đặt danh sách phát là "Công khai" hoặc "Không công khai".')
+
+    const items = []
+    const seen = new Set()
+    const push = (id, title, durationSec, unavailable) => {
+        if (!id || !ID_RE.test(id) || seen.has(id)) return
+        seen.add(id)
+        title = String(title || '').trim()
+        items.push({ id, title, durationSec, unavailable: Boolean(unavailable || UNAVAILABLE_TITLE.test(title)) })
+    }
+    const textOf = (t) => t?.simpleText || (t?.runs || []).map((r) => r.text).join('') || t?.content || ''
+    const findBadge = (o) => {
+        let found = 0
+        ;(function walk(x) {
+            if (found || !x || typeof x !== 'object') return
+            if (x.thumbnailBadgeViewModel && timeToSec(x.thumbnailBadgeViewModel.text)) found = timeToSec(x.thumbnailBadgeViewModel.text)
+            for (const k in x) walk(x[k])
+        })(o)
+        return found
+    }
+    ;(function walk(o) {
+        if (!o || typeof o !== 'object') return
+        // Hai kiểu trang YouTube đang dùng: kiểu cũ (playlistVideoRenderer) và mới (lockupViewModel).
+        if (o.playlistVideoRenderer) {
+            const v = o.playlistVideoRenderer
+            return push(v.videoId, textOf(v.title), Number(v.lengthSeconds) || 0, v.isPlayable === false)
+        }
+        if (o.lockupViewModel && o.lockupViewModel.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO') {
+            const v = o.lockupViewModel
+            return push(v.contentId, v.metadata?.lockupMetadataViewModel?.title?.content, findBadge(v.contentImage), false)
+        }
+        for (const k in o) walk(o[k])
+    })(data.contents || data)
+
+    if (items.length === 0) throw new Error('Danh sách phát trống, hoặc đang để "Riêng tư" — máy chủ không xem được.')
+    const title = data.metadata?.playlistMetadataRenderer?.title || data.header?.playlistHeaderRenderer?.title?.simpleText || ''
+    return { title: String(title).trim(), items, hasMore: items.length >= 100 && html.includes('continuationCommand') }
 }
 
 /** Tên + thời lượng (giây, 0 nếu không đọc được). Ném lỗi khi video không xem được. */
@@ -127,6 +218,8 @@ function sendVideoThumb(res, video) {
 
 module.exports = {
     parseYouTubeId,
+    parsePlaylistId,
+    fetchPlaylist,
     fetchYouTubeInfo,
     saveYouTubeThumb,
     removeVideoThumb,
