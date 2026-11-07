@@ -183,7 +183,8 @@ const getCourseExercise = asyncHandler(async function getCourseExercise(req, res
     const [set, attempts, videoCount] = await Promise.all([
         MaterialExercise.findOne({ courseId: course._id }).lean(),
         MaterialExerciseAttempt.countDocuments({ courseId: course._id }),
-        MaterialVideo.countDocuments({ courseId: course._id, status: 'published' }),
+        // Chỉ video nhóm bổ sung mới bắt xem đủ trước khi làm bài tập.
+        MaterialVideo.countDocuments({ courseId: course._id, status: 'published', ...MaterialVideo.SUPPLEMENT_FILTER }),
     ])
     res.json({
         course: { _id: course._id, name: course.name, slug: course.slug },

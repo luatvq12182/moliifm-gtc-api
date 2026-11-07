@@ -135,6 +135,7 @@ const getMyCourse = asyncHandler(async function getMyCourse(req, res) {
             description: v.description,
             durationSec: v.durationSec,
             hasThumb: Boolean(v.thumbFile),
+            group: v.group === 'curriculum' ? 'curriculum' : 'supplement',
             progress: progressView(progressOf.get(String(v._id)), v.durationSec),
         })),
         exercise,
@@ -207,6 +208,7 @@ const getMyVideo = asyncHandler(async function getMyVideo(req, res) {
         youtubeId: video.youtubeId,
         hasThumb: Boolean(video.thumbFile),
         course: { name: course.name, slug: course.slug },
+        group: video.group === 'curriculum' ? 'curriculum' : 'supplement',
         progress: progressView(p, video.durationSec, { withSegments: true }),
         // Bài tập của KHOÁ (không phải của riêng video này).
         exercise,
@@ -267,16 +269,19 @@ const saveMyVideoProgress = asyncHandler(async function saveMyVideoProgress(req,
 
 // ---------- bài tập của khoá ----------
 //
-// MỖI KHOÁ MỘT BỘ BÀI TẬP. Học viên phải xem đủ TẤT CẢ video đang hiện của
-// khoá (mỗi video >= 95% thời lượng thực sự phát) mới làm được.
+// MỖI KHOÁ MỘT BỘ BÀI TẬP. Học viên phải xem đủ TẤT CẢ video đang hiện thuộc
+// nhóm "Video bài giảng bổ sung" của khoá (mỗi video >= 95% thời
+// lượng thực sự phát) mới làm được. Nhóm "theo giáo trình" không tính.
 
 const AI_DAILY_LIMIT = () => Number(process.env.AI_GRADE_DAILY_LIMIT) || 40
 const SUBMIT_COOLDOWN_MS = 10 * 1000
 
-/** Học viên đã xem đủ bao nhiêu video của khoá. */
+/** Học viên đã xem đủ bao nhiêu video nhóm bổ sung của khoá. */
 async function courseWatchState(studentId, courseId) {
     const [videos, progress] = await Promise.all([
-        visibleVideos(courseId).select('_id title durationSec').lean(),
+        // Chỉ nhóm "Video bài giảng bổ sung"; video theo giáo trình
+        // không tính vào điều kiện mở bài tập.
+        MaterialVideo.find({ courseId, status: 'published', ...MaterialVideo.SUPPLEMENT_FILTER }).select('_id durationSec').lean(),
         MaterialVideoProgress.find({ student: studentId, courseId }).lean(),
     ])
     const progressOf = new Map(progress.map((p) => [String(p.video), p]))
@@ -327,7 +332,7 @@ async function requireAllWatched(req, res, course) {
     if (watch.unlocked) return watch
     res.status(403)
     const err = new Error(
-        `Bạn cần xem hết tất cả video của khoá rồi mới làm bài tập (đã xem đủ ${watch.watchedVideos}/${watch.totalVideos} video).`
+        `Bạn cần xem hết các video bài giảng bổ sung của khoá rồi mới làm bài tập (đã xem đủ ${watch.watchedVideos}/${watch.totalVideos} video).`
     )
     err.appCode = 'VIDEO_NOT_WATCHED'
     throw err

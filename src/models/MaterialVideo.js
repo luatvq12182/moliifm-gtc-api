@@ -19,6 +19,13 @@ const materialVideoSchema = new mongoose.Schema(
         description: { type: String, trim: true, default: '' },
         order: { type: Number, default: 0 },
         status: { type: String, enum: ['draft', 'published'], default: 'draft' },
+        // Nhóm video trong tab "Video bài giảng":
+        //   supplement  Video bài giảng bổ sung HSK 3.0 — xem đủ hết
+        //               nhóm này mới mở bài tập của khoá
+        //   curriculum  Video bài giảng theo giáo trình — chỉ để xem, không có
+        //               bài tập, không bắt xem đủ
+        // Video tạo trước khi có trường này (chưa có `group`) thuộc 'supplement'.
+        group: { type: String, enum: ['supplement', 'curriculum'], default: 'supplement' },
 
         youtubeId: { type: String, required: true },
         youtubeUrl: { type: String, default: '' }, // link admin đã dán (admin xem lại)
@@ -33,4 +40,10 @@ const materialVideoSchema = new mongoose.Schema(
 
 materialVideoSchema.index({ courseId: 1, order: 1 })
 
+const VIDEO_GROUPS = ['supplement', 'curriculum']
+/** Điều kiện lọc video thuộc nhóm bổ sung (tính cả video cũ chưa có `group`). */
+const SUPPLEMENT_FILTER = { group: { $ne: 'curriculum' } }
+
 module.exports = mongoose.model('MaterialVideo', materialVideoSchema)
+module.exports.VIDEO_GROUPS = VIDEO_GROUPS
+module.exports.SUPPLEMENT_FILTER = SUPPLEMENT_FILTER
