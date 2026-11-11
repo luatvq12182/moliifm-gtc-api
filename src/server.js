@@ -7,6 +7,8 @@ const { attachPronunciationWs } = require('./lib/pronunciationWs')
 const { startMaintenanceLoop } = require('./lib/practiceCleanup')
 const { backfillLessonAttemptStatus } = require('./lib/lessonProgress')
 const { resumeMaterialConversions } = require('./lib/materialConvert')
+const { resumeExamConversions } = require('./lib/examTest')
+const { startExamSweeper } = require('./lib/examGrading')
 
 const PORT = process.env.PORT || 4000
 
@@ -28,6 +30,11 @@ async function start() {
     resumeMaterialConversions().catch((err) =>
       console.error('[materialConvert] Không khởi động được:', err.message)
     )
+    resumeExamConversions().catch((err) =>
+      console.error('[examTest] Không khởi động được:', err.message)
+    )
+    // Bài luyện thi quá giờ mà học viên bỏ đi -> tự nộp + chấm; bài kẹt "đang chấm" -> chấm lại.
+    startExamSweeper()
 
     // Tạo HTTP server tường minh (thay vì app.listen) để gắn được
     // WebSocket chấm phát âm iFLYTEK vào cùng server/cổng.

@@ -11,7 +11,8 @@ const AppSetting = require('../models/AppSetting')
  * theo ANTHROPIC_MODEL trong .env, không có nữa thì DEFAULT_MODEL.
  * ANTHROPIC_BASE_URL chỉ để bài kiểm tra trỏ sang máy chủ giả.
  *
- * Chỉ gửi đi: từ cần đặt câu, câu mẫu, câu học viên viết, ảnh minh hoạ — KHÔNG
+ * Chỉ gửi đi: từ cần đặt câu, câu mẫu, câu học viên viết, ảnh minh hoạ / ảnh
+ * trang đề, mô tả tranh — KHÔNG
  * gửi tên, số điện thoại hay thông tin nào của học viên.
  */
 
@@ -174,13 +175,31 @@ function readGraded(data) {
     }
 }
 
+const STORAGE_ROOT = path.resolve(__dirname, '../../storage')
+
+/** Ảnh trong storage/ (vd. trang đề thi đã chuyển thành ảnh) -> khối ảnh gửi kèm. */
+function storageImageBlock(abs) {
+    const file = path.resolve(String(abs || ''))
+    if (!file.startsWith(STORAGE_ROOT + path.sep)) return null
+    const type = IMAGE_TYPES[path.extname(file).toLowerCase()]
+    try {
+        if (!type || fs.statSync(file).size > MAX_IMAGE_BYTES) return null
+        return { type: 'image', source: { type: 'base64', media_type: type, data: fs.readFileSync(file).toString('base64') } }
+    } catch {
+        return null
+    }
+}
+
 /**
- * Chấm các câu. items: [{ id, word, image, sample, answer }].
+ * Chấm các câu. items: [{ id, word, image, sample, answer, hint }].
+ * `pageImages`: ảnh trang đề (đường dẫn tuyệt đối trong storage/) có tranh của
+ * các câu — gửi một lần ở đầu (đề thi: tranh in trên trang đề, không có ảnh riêng).
+ * `hint`: mô tả tranh do giáo viên viết (khi AI không xem được tranh).
  * `rubric`, `model`: dùng thay bản đang lưu (admin "chấm thử" bản nháp).
  * Trả { model, items: { [id]: { verdict, comment, corrected } } }.
  * Câu bỏ trống chấm luôn "chưa đạt", không gửi AI. Lỗi gọi AI -> ném lỗi.
  */
-async function gradeSentences(items, { rubric, model } = {}) {
+async function gradeSentences(items, { rubric, model, pageImages = [] } = {}) {
     const out = {}
     const todo = []
     for (const it of items) {
@@ -190,12 +209,22 @@ async function gradeSentences(items, { rubric, model } = {}) {
     if (todo.length === 0) return { model: '', items: out }
 
     const content = []
+    const pages = pageImages.map(storageImageBlock).filter(Boolean)
+    if (pages.length) {
+        content.push({
+            type: 'text',
+            text: 'Trang đề thi ngay dưới có tranh của các câu (mỗi tranh đánh số theo số câu ghi ở cuối mỗi câu bên dưới, vd. "câu đề số 66"). Hiểu tranh của từng câu theo số đó.',
+        })
+        content.push(...pages)
+    }
     todo.forEach((it, i) => {
         content.push({
             type: 'text',
             text:
                 `Câu ${i + 1} (id: ${it.id})\n` +
+                (it.examNo ? `Câu đề số ${it.examNo} (xem tranh số ${it.examNo} trên trang đề)\n` : '') +
                 `Từ cho sẵn: ${it.word}\n` +
+                (it.hint ? `Mô tả tranh (giáo viên viết): ${it.hint}\n` : '') +
                 (it.sample ? `Câu mẫu tham khảo:\n${it.sample}\n` : '') +
                 `Câu học viên viết: <<<${String(it.answer).replace(/<<<|>>>/g, '')}>>>` +
                 (it.image ? '\nHình minh hoạ của câu này ở ngay dưới.' : ''),
@@ -227,7 +256,7 @@ async function gradeSentences(items, { rubric, model } = {}) {
     })
     if (!data) {
         NO_FORCED_TOOL.add(useModel)
-        return gradeSentences(items, { rubric: guide, model: useModel })
+        return gradeSentences(items, { rubric: guide, model: useModel, pageImages })
     }
 
     const graded = readGraded(data)
