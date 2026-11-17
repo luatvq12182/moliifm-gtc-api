@@ -419,7 +419,7 @@ async function main() {
     check('vào thi: SĐT sai -> 400', r.status, 400)
     r = await api('POST', `/exam/tests/${test._id}/attempts`, { token: tYes, body: { name: '', phone: PHONES.yes } })
     check('vào thi: thiếu tên -> 400', r.status, 400)
-    r = await api('POST', `/exam/tests/${test._id}/attempts`, { token: tYes, body: { name: 'Thí sinh A', phone: '+84 900 000 071', classCode: 'HSK3-K12' } })
+    r = await api('POST', `/exam/tests/${test._id}/attempts`, { token: tYes, body: { name: 'Thí sinh A', phone: '+84 900 000 071', classCode: 'SMOKE-K99' } })
     const att = r.body._id
     check('vào thi -> tạo lượt làm, chuẩn hoá SĐT', [r.status, r.body.resumed, (await ExamAttempt.findById(att)).candidate.phone], [201, false, PHONES.yes])
     r = await api('POST', `/exam/tests/${test._id}/attempts`, { token: tYes, body: { name: 'Khác', phone: PHONES.yes } })
@@ -505,12 +505,12 @@ async function main() {
     }
     let ga = await graded(att)
     // Đáp án đề: câu n = "ABC"[n % 3]; 61–65 = 汽… Bài làm: 1 B✓ 2 C✓ 3 A✓ 4 B✓ · 31 D✗ 32 E✗ · 61 " 汽 "✓ · 66 có viết
-    check('nộp xong tự chấm: nghe 4 câu đúng = 13 điểm, đọc 0, viết 8 (chữ Hán, bỏ khoảng trắng)',
+    check('nộp xong tự chấm: nghe 4 câu đúng = 13 điểm, đọc 0, viết 10 (chữ Hán 10đ/câu, bỏ khoảng trắng)',
         [ga.result.sections.listening.correct, ga.result.sections.listening.score, ga.result.sections.reading.score, ga.result.items['61'].ok, ga.result.sections.writing.score],
-        [4, 13, 0, true, 8])
-    check('tổng 21/300, chưa đỗ (180)', [ga.result.total, ga.result.max, ga.result.passed, ga.result.passScore], [21, 300, false, 200])
+        [4, 13, 0, true, 10])
+    check('tổng 23/300, chưa đỗ', [ga.result.total, ga.result.max, ga.result.passed, ga.result.passScore], [23, 300, false, 200])
     check('chưa cài khoá AI -> đặt câu chưa chấm ("unavailable"), câu bỏ trống 0 điểm',
-        [ga.result.ai.status, ga.result.items['66'].verdict, ga.result.items['67'].verdict, ga.result.items['67'].points], ['unavailable', null, 'blank', 0])
+        [ga.result.ai.status, ga.result.items['66'].score, ga.result.items['66'].max, ga.result.items['67'].blank, ga.result.items['67'].points], ['unavailable', null, 10, true, 0])
     r = await api('GET', `/exam/attempts/${att}`, { token: tYes })
     check('học viên xem kết quả: đáp án đúng từng câu', [r.body.result.items['31'].correct, r.body.result.items['31'].ok, r.body.result.items['31'].given, r.body.canRegrade], ['B', false, 'D', false])
 
@@ -530,7 +530,8 @@ async function main() {
             }
             const ids = [...raw.matchAll(/\(id: ([0-9]+)\)/g)].map((m) => m[1])
             s2.writeHead(200, { 'Content-Type': 'application/json' })
-            s2.end(JSON.stringify({ model: 'claude-test', content: [{ type: 'tool_use', name: 'ket_qua_cham', input: { items: ids.map((id) => ({ id, verdict: 'dat', comment: 'Câu hay.', corrected: '她在打电话。' })) } }] }))
+            // AI "cho" 9 điểm; thử luôn trường hợp AI trả quá thang (15) -> phải bị chặn về 10 ở câu thứ hai trở đi
+            s2.end(JSON.stringify({ model: 'claude-test', content: [{ type: 'tool_use', name: 'cham_diem_cau', input: { items: ids.map((id, i) => ({ id, score: i === 0 ? 9 : 15, comment: 'Câu hay.', corrected: '她在打电话。' })) } }] }))
         })
     })
     await new Promise((ok) => fakeAi.listen(0, '127.0.0.1', ok))
@@ -539,12 +540,13 @@ async function main() {
     try {
         r = await api('POST', `/admin/exam/attempts/${att}/regrade`, { token: A })
         const sent = JSON.stringify(aiReq)
-        check('admin chấm lại -> AI chấm câu 66: đạt 12 điểm, viết 20, tổng 33',
-            [r.status, r.body.result.ai.status, r.body.result.items['66'].verdict, r.body.result.items['66'].points, r.body.result.sections.writing.score, r.body.result.total],
-            [200, 'done', 'dat', 12, 20, 33])
+        check('admin chấm lại -> AI cho câu 66: 9/10 điểm, viết 19, tổng 32',
+            [r.status, r.body.result.ai.status, r.body.result.items['66'].score, r.body.result.items['66'].points, r.body.result.items['66'].ok, r.body.result.sections.writing.score, r.body.result.total],
+            [200, 'done', 9, 9, true, 19, 32])
+        check('...yêu cầu AI chấm thang 0–10 bằng công cụ cho điểm', [aiReq.tool_choice?.name, /từ 0 đến 10/.test(aiReq.system), /0 ĐẾN 10/.test(aiReq.system)], ['cham_diem_cau', true, true])
         check('...gửi AI: ảnh trang đề có tranh, số câu đề, từ bắt buộc, mô tả tranh',
             [aiReq.messages[0].content.some((c) => c.type === 'image'), sent.includes('Câu đề số 66'), sent.includes('电话'), sent.includes('cô gái đang gọi điện')], [true, true, true, true])
-        check('...KHÔNG gửi tên / SĐT / mã lớp thí sinh sang AI', [sent.includes('Thí sinh A'), sent.includes(PHONES.yes), sent.includes('HSK3-K12'), sent.includes('Smoke')], [false, false, false, false])
+        check('...KHÔNG gửi tên / SĐT / mã lớp thí sinh sang AI', [sent.includes('Thí sinh A'), sent.includes(PHONES.yes), sent.includes('SMOKE-K99'), sent.includes('Smoke')], [false, false, false, false])
         check('...câu bỏ trống không gửi AI', (sent.match(/\(id: /g) || []).length, 1)
 
         aiMode = 'down'
@@ -555,7 +557,7 @@ async function main() {
         r = await api('POST', `/exam/attempts/${att}/regrade`, { token: tYes })
         check('học viên bấm chấm lại -> đang chấm', r.body.result.ai.status, 'pending')
         ga = await graded(att)
-        check('...xong: đạt, tổng 33', [ga.result.ai.status, ga.result.total], ['done', 33])
+        check('...xong: 9 điểm, tổng 32', [ga.result.ai.status, ga.result.total], ['done', 32])
         r = await api('POST', `/exam/attempts/${att}/regrade`, { token: tYes })
         check('đã chấm xong thì học viên không chấm lại được nữa', [r.body.result.ai.status, r.body.canRegrade], ['done', false])
 
@@ -575,9 +577,9 @@ async function main() {
 
         // Admin: danh sách + sửa đáp án rồi chấm lại cả đề
         r = await api('GET', `/admin/exam/attempts?testId=${test._id}`, { token: A })
-        check('admin: danh sách bài làm của đề (3 bài), có điểm', [r.body.pagination.total, r.body.data.every((x) => x.status === 'submitted'), r.body.data.find((x) => x._id === att).result.total], [3, true, 33])
+        check('admin: danh sách bài làm của đề (3 bài), có điểm', [r.body.pagination.total, r.body.data.every((x) => x.status === 'submitted'), r.body.data.find((x) => x._id === att).result.total], [3, true, 32])
         check('...không kèm câu trả lời chi tiết (nhẹ)', JSON.stringify(r.body).includes('我给朋友打电话'), false)
-        r = await api('GET', `/admin/exam/attempts?search=HSK3-K12`, { token: A })
+        r = await api('GET', `/admin/exam/attempts?search=SMOKE-K99`, { token: A })
         check('tìm theo mã lớp', r.body.data.map((x) => x._id), [att])
         r = await api('GET', `/admin/exam/attempts?search=${PHONES.yes}&status=submitted&levelId=${level._id}`, { token: A })
         check('tìm theo SĐT tài khoản + lọc cấp, trạng thái', r.body.pagination.total, 3)
@@ -588,15 +590,15 @@ async function main() {
         const callsBefore2 = aiCalls
         r = await api('POST', `/admin/exam/tests/${test._id}/regrade`, { token: A })
         ga = await ExamAttempt.findById(att).lean()
-        check('sửa đáp án câu 31 -> chấm lại cả đề: câu 31 đúng, giữ nhận xét AI, không gọi lại AI',
-            [r.body.regraded, ga.result.items['31'].ok, ga.result.sections.reading.score, ga.result.items['66'].verdict, ga.result.total, aiCalls - callsBefore2],
-            [3, true, 3, 'dat', 36, 0])
+        check('sửa đáp án câu 31 -> chấm lại cả đề: câu 31 đúng, giữ điểm AI, không gọi lại AI',
+            [r.body.regraded, ga.result.items['31'].ok, ga.result.sections.reading.score, ga.result.items['66'].score, ga.result.total, aiCalls - callsBefore2],
+            [3, true, 3, 9, 35, 0])
         r = await api('GET', `/admin/exam/attempts/${att}`, { token: A })
-        check('admin xem chi tiết: thí sinh, tài khoản, từng câu', [r.body.candidate.classCode, r.body.student.phone, r.body.result.items['66'].comment], ['HSK3-K12', PHONES.yes, 'Câu hay.'])
+        check('admin xem chi tiết: thí sinh, tài khoản, từng câu', [r.body.candidate.classCode, r.body.student.phone, r.body.result.items['66'].comment], ['SMOKE-K99', PHONES.yes, 'Câu hay.'])
         r = await api('GET', `/exam/levels/${SLUG}hsk3`, { token: tYes })
         check('trang cấp của học viên: điểm lần gần nhất', [r.body.tests[0].submittedCount, r.body.tests[0].last.total !== null], [3, true])
         r = await api('GET', `/exam/tests/${test._id}`, { token: tYes })
-        check('trang giới thiệu đề: lịch sử 3 lần làm kèm điểm', [r.body.history.length, r.body.history.some((h) => h.total === 36)], [3, true])
+        check('trang giới thiệu đề: lịch sử 3 lần làm kèm điểm', [r.body.history.length, r.body.history.some((h) => h.total === 35)], [3, true])
         r = await api('DELETE', `/admin/exam/attempts/${att3}`, { token: A })
         check('admin xoá một bài làm', [r.status, await ExamAttempt.countDocuments({ _id: att3 })], [200, 0])
         r = await api('GET', `/admin/exam/attempts`, { token: tYes })

@@ -24,8 +24,9 @@ const MAX_QUESTIONS = 200
 const MAX_PDF_PAGES = 120
 const AUDIO_EXTS = ['mp3', 'm4a', 'aac', 'wav', 'ogg']
 
-// Điểm mỗi câu nghe / đọc: 30 câu chia đều 100 điểm (theo hướng dẫn tự chấm
-// chính thức). Viết: chữ Hán 8 điểm/câu; đặt câu theo mức AI chấm.
+// Điểm mỗi câu nghe / đọc: 30 câu chia đều 100 điểm. Viết: 100 điểm chia 10
+// câu — chữ Hán 10 điểm/câu (đúng mới có điểm), đặt câu AI cho 0–10 điểm/câu
+// (khách chốt theo file đáp án Đề 1 HSK3).
 const PER_30 = 100 / 30
 
 /**
@@ -47,15 +48,9 @@ const TEMPLATES = {
             { section: 'reading', type: 'choice', from: 41, to: 45, options: 'ABCDEF', title: 'Chọn từ điền vào chỗ trống', points: PER_30 },
             { section: 'reading', type: 'choice', from: 46, to: 50, options: 'ABCDEF', title: 'Chọn từ điền vào chỗ trống', points: PER_30 },
             { section: 'reading', type: 'choice', from: 51, to: 60, options: 'ABC', title: 'Đọc đoạn văn, chọn đáp án đúng', points: PER_30 },
-            { section: 'writing', type: 'text', from: 61, to: 65, title: 'Viết chữ Hán theo phiên âm', points: 8 },
-            {
-                section: 'writing',
-                type: 'sentence',
-                from: 66,
-                to: 70,
-                title: 'Nhìn tranh, dùng từ cho sẵn đặt câu',
-                verdictPoints: { dat: 12, gan_dat: 8, chua_dat: 4 },
-            },
+            { section: 'writing', type: 'text', from: 61, to: 65, title: 'Viết chữ Hán theo phiên âm', points: 10 },
+            // Đặt câu: `points` = điểm TỐI ĐA mỗi câu, AI cho điểm từ 0 tới đó.
+            { section: 'writing', type: 'sentence', from: 66, to: 70, title: 'Nhìn tranh, dùng từ cho sẵn đặt câu', points: 10 },
         ],
     },
     blank: { label: 'Trống — tự khai cấu trúc', timing: { listeningSec: 0, reviewSec: 300, readingSec: 1800, writingSec: 1200 }, groups: [] },
@@ -97,12 +92,10 @@ function cleanGroups(input) {
             out.options = [...new Set(String(g.options || '').toUpperCase().replace(/[^A-Z]/g, ''))].join('').slice(0, 10)
             if (out.options.length < 2) throw new Error(`Nhóm câu ${from}–${to}: cần ít nhất 2 lựa chọn (vd. ABC).`)
         }
-        if (type === 'sentence') {
-            const vp = g.verdictPoints || {}
-            out.verdictPoints = { dat: num(vp.dat, { max: 100 }), gan_dat: num(vp.gan_dat, { max: 100 }), chua_dat: num(vp.chua_dat, { max: 100 }) }
-        } else {
-            out.points = num(g.points, { max: 100 })
-        }
+        // Đặt câu: `points` là điểm tối đa mỗi câu (AI cho 0..points). Đề cũ chỉ
+        // có verdictPoints (đạt / gần đạt / chưa đạt) -> lấy mức "đạt" làm tối đa.
+        out.points = num(type === 'sentence' && !g.points ? g.verdictPoints?.dat : g.points, { max: 100 })
+        if (type === 'sentence' && out.points < 1) throw new Error(`Nhóm câu ${from}–${to}: cần điểm tối đa mỗi câu cho AI chấm (vd. 10).`)
         return out
     })
     groups.sort((a, b) => a.from - b.from)
@@ -149,12 +142,15 @@ function cleanItems(input, groups) {
     return [...out.values()].sort((a, b) => a.no - b.no)
 }
 
-/** Tổng điểm tối đa từng phần + cả đề (đặt câu tính theo mức "đạt"). */
+/** Điểm tối đa mỗi câu của nhóm (đề cũ: đặt câu chấm theo mức -> mức "đạt"). */
+const sentenceMaxOr = (g) => Number(g.points) || (g.type === 'sentence' ? Number(g.verdictPoints?.dat) || 0 : 0)
+
+/** Tổng điểm tối đa từng phần + cả đề. */
 function scoreSummary(groups) {
     const max = { listening: 0, reading: 0, writing: 0 }
     for (const g of groups) {
         const n = g.to - g.from + 1
-        max[g.section] += n * (g.type === 'sentence' ? g.verdictPoints?.dat || 0 : g.points || 0)
+        max[g.section] += n * sentenceMaxOr(g)
     }
     return {
         listening: round2(max.listening),
@@ -278,6 +274,7 @@ async function resumeExamConversions() {
 }
 
 module.exports = {
+    sentenceMaxOr,
     EXAM_DIR,
     TEMPLATES,
     SECTIONS,

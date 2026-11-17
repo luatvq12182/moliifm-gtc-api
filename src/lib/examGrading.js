@@ -1,8 +1,8 @@
 const ExamAttempt = require('../models/ExamAttempt')
 const ExamTest = require('../models/ExamTest')
 const { normalizeAnswer } = require('./exercise')
-const { gradeSentences, isAiConfigured } = require('./aiGrader')
-const { testPagePath } = require('./examTest')
+const { gradeExamSentences, isAiConfigured } = require('./aiGrader')
+const { testPagePath, sentenceMaxOr } = require('./examTest')
 
 /**
  * CHẤM BÀI LUYỆN THI.
@@ -10,8 +10,8 @@ const { testPagePath } = require('./examTest')
  *   - Câu chọn đáp án / viết chữ Hán: máy chấm ngay khi nộp, theo đáp án của
  *     đề lúc chấm (đáp án đúng được chép vào kết quả — admin sửa đáp án sau thì
  *     bài cũ giữ nguyên, tới khi admin bấm "chấm lại").
- *   - Câu đặt câu: AI chấm (chạy nền vài chục giây), mỗi mức đạt / gần đạt /
- *     chưa đạt một số điểm; bỏ trống 0 điểm, không gửi AI.
+ *   - Câu đặt câu: AI CHO ĐIỂM (chạy nền vài chục giây), từ 0 tới điểm tối
+ *     đa mỗi câu của đề (khách chốt 10); bỏ trống 0 điểm, không gửi AI.
  *
  * Điểm mỗi phần làm tròn tới số nguyên; tổng = cộng điểm các phần (như phiếu
  * điểm HSK). Chưa chấm xong phần AI thì tổng là điểm TẠM.
@@ -28,11 +28,16 @@ const matches = (given, expected) =>
         .filter(Boolean)
         .includes(normalizeAnswer(given))
 
+// Bài chấm theo cách cũ (đạt / gần đạt / chưa đạt) -> quy ra điểm khi chấm lại.
+const VERDICT_RATIO = { dat: 1, gan_dat: 2 / 3, chua_dat: 1 / 3 }
+// Câu đặt câu được tính là "đạt" (đếm câu đạt, lọc câu sai) khi từ 60% điểm tối đa.
+const PASS_RATIO = 0.6
+
 /**
- * Tính kết quả từ câu trả lời + đáp án. `aiVerdicts`: { no: { verdict, comment,
- * corrected } } đã có (giữ lại khi chỉ chấm lại phần máy chấm).
+ * Tính kết quả từ câu trả lời + đáp án. `aiScores`: { no: { score, comment,
+ * corrected } } AI đã chấm (giữ lại khi chỉ chấm lại phần máy chấm).
  */
-function scoreAttempt(attempt, test, { aiVerdicts = {}, ai = { status: 'none' } } = {}) {
+function scoreAttempt(attempt, test, { aiScores = {}, ai = { status: 'none' } } = {}) {
     const key = new Map((test?.items || []).map((it) => [it.no, it]))
     const answers = attempt.answers || {}
     const items = {}
@@ -45,18 +50,19 @@ function scoreAttempt(attempt, test, { aiVerdicts = {}, ai = { status: 'none' } 
             const k = key.get(no) || {}
             count[g.section][1]++
             if (g.type === 'sentence') {
-                const vp = g.verdictPoints || {}
-                max[g.section] += Number(vp.dat) || 0
-                const item = { type: g.type, given, keyword: k.keyword || attempt.snapshot.keywords?.[no] || '', sample: k.sample || '' }
+                const cap = sentenceMaxOr(g)
+                max[g.section] += cap
+                const item = { type: g.type, given, max: cap, keyword: k.keyword || attempt.snapshot.keywords?.[no] || '', sample: k.sample || '' }
+                const v = aiScores[no]
                 if (!given.trim()) {
-                    Object.assign(item, { verdict: 'blank', points: 0, comment: 'Bạn chưa viết câu này.' })
-                } else if (aiVerdicts[no]) {
-                    const v = aiVerdicts[no]
-                    Object.assign(item, { verdict: v.verdict, comment: v.comment || '', corrected: v.corrected || '', points: Number(vp[v.verdict]) || 0 })
-                    if (v.verdict === 'dat') count[g.section][0]++
+                    Object.assign(item, { blank: true, score: 0, points: 0, ok: false, comment: 'Bạn chưa viết câu này.' })
+                } else if (v) {
+                    const score = Math.max(0, Math.min(cap, v.score ?? Math.round(cap * (VERDICT_RATIO[v.verdict] || 0))))
+                    Object.assign(item, { score, points: score, ok: score >= cap * PASS_RATIO, comment: v.comment || '', corrected: v.corrected || '' })
                 } else {
-                    Object.assign(item, { verdict: null, points: 0 }) // chờ AI
+                    Object.assign(item, { score: null, points: 0, ok: false }) // chờ AI
                 }
+                if (item.ok) count[g.section][0]++
                 raw[g.section] += item.points
                 items[no] = item
                 continue
@@ -103,7 +109,16 @@ function sentenceTodo(attempt, test) {
             const answer = String(attempt.answers?.[no] ?? '')
             if (!answer.trim()) continue
             const k = key.get(no) || {}
-            out.push({ id: String(no), examNo: no, word: k.keyword || attempt.snapshot.keywords?.[no] || '', sample: k.sample || '', hint: k.hint || '', answer, page: g.page || 0 })
+            out.push({
+                id: String(no),
+                examNo: no,
+                word: k.keyword || attempt.snapshot.keywords?.[no] || '',
+                sample: k.sample || '',
+                hint: k.hint || '',
+                answer,
+                page: g.page || 0,
+                max: sentenceMaxOr(g),
+            })
         }
     }
     return out
@@ -125,15 +140,15 @@ async function gradeAttempt(attemptId, { keepAi = false, ignoreLimit = false } =
         const attempt = await ExamAttempt.findById(id).lean()
         if (!attempt || attempt.status !== 'submitted') return null
         const test = await ExamTest.findById(attempt.testId).lean()
-        const oldVerdicts = {}
+        const oldScores = {}
         for (const [no, it] of Object.entries(attempt.result?.items || {})) {
-            if (it.type === 'sentence' && it.verdict && it.verdict !== 'blank') oldVerdicts[no] = it
+            if (it.type === 'sentence' && !it.blank && (it.score != null || (it.verdict && it.verdict !== 'blank'))) oldScores[no] = it
         }
         const todo = sentenceTodo(attempt, test)
 
         if (keepAi || todo.length === 0) {
             const result = scoreAttempt(attempt, test, {
-                aiVerdicts: keepAi ? oldVerdicts : {},
+                aiScores: keepAi ? oldScores : {},
                 ai: todo.length === 0 ? { status: 'none' } : attempt.result?.ai || { status: 'none' },
             })
             await ExamAttempt.updateOne({ _id: id }, { $set: { result } })
@@ -154,10 +169,18 @@ async function gradeAttempt(attemptId, { keepAi = false, ignoreLimit = false } =
         try {
             const pageNos = [...new Set(todo.map((t) => t.page).filter(Boolean))]
             const pageImages = pageNos.map((n) => testPagePath(test, n - 1)).filter(Boolean)
-            const graded = await gradeSentences(todo, { pageImages })
-            const verdicts = {}
-            for (const t of todo) verdicts[t.examNo] = graded.items[t.id]
-            result = scoreAttempt(attempt, test, { aiVerdicts: verdicts, ai: { status: 'done', model: graded.model, at: new Date() } })
+            // Mỗi nhóm có thể có điểm tối đa khác nhau -> gọi AI theo từng mức (thường chỉ một).
+            const scores = {}
+            let model = ''
+            for (const cap of [...new Set(todo.map((t) => t.max))]) {
+                const graded = await gradeExamSentences(
+                    todo.filter((t) => t.max === cap),
+                    { maxScore: cap, pageImages }
+                )
+                model = graded.model || model
+                for (const t of todo.filter((x) => x.max === cap)) scores[t.examNo] = graded.items[t.id]
+            }
+            result = scoreAttempt(attempt, test, { aiScores: scores, ai: { status: 'done', model, at: new Date() } })
         } catch (err) {
             result = scoreAttempt(attempt, test, { ai: { status: 'error', error: err.message.slice(0, 300), at: new Date() } })
         }
