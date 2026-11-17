@@ -16,6 +16,8 @@ ACCESS_TOKEN.md
 
 # Tài liệu gốc khách gửi (có thể chứa nội dung chưa công bố)
 FILE_DOCS/
+# Tài liệu khách gửi cho phần Luyện thi (đề PDF, file nghe, đáp án) — chỉ để nhập dữ liệu
+luyen-thi/
 backup-lessons/
 
 # Rác của macOS Finder

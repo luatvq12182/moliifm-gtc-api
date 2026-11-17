@@ -9,6 +9,8 @@ const uploadRoutes = require('./uploadRoutes')
 const lessonAttemptRoutes = require('./lessonAttemptRoutes')
 const materialRoutes = require('./materialRoutes')
 const adminMaterialRoutes = require('./adminMaterialRoutes')
+const examRoutes = require('./examRoutes')
+const adminExamRoutes = require('./adminExamRoutes')
 
 const router = express.Router()
 
@@ -33,6 +35,7 @@ router.use('/admin/curricula', adminCurriculumRoutes)
 router.use('/admin/courses', adminCourseRoutes)
 router.use('/admin/lessons', adminLessonRoutes)
 router.use('/admin/materials', adminMaterialRoutes)
+router.use('/admin/exam', adminExamRoutes)
 router.use('/admin/uploads', uploadRoutes)
 
 // Lịch sử học của học viên. Mount ở '/lesson-attempts' nên phải đứng TRƯỚC
@@ -42,6 +45,9 @@ router.use('/lesson-attempts', lessonAttemptRoutes)
 
 // Học liệu khoá học (slide bài giảng). Cũng phải đứng TRƯỚC publicCatalogRoutes.
 router.use('/materials', materialRoutes)
+
+// Luyện thi HSK 3.0. Cũng phải đứng TRƯỚC publicCatalogRoutes.
+router.use('/exam', examRoutes)
 
 // Học viên xem (public, cần đăng nhập học viên — xem publicCatalogRoutes.js)
 router.use('/', publicCatalogRoutes)

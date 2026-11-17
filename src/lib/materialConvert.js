@@ -329,6 +329,108 @@ function jpegSize(buf) {
     return null
 }
 
+/**
+ * PDF -> ảnh từng trang (page-N.jpg) + ảnh thu nhỏ (thumb-N.jpg) trong `outDir`
+ * (xoá sạch trước khi làm). Dùng chung cho bộ slide học liệu và đề luyện thi.
+ *
+ * `splitSpreads`: file scan kiểu hai trang giấy nằm cạnh nhau trên một trang
+ * ngang (đề thi photo) -> cắt mỗi trang NGANG thành hai nửa trái / phải; trang
+ * dọc giữ nguyên.
+ *
+ * Trả [{ file, thumb, width, height }] theo đúng thứ tự đọc.
+ */
+async function rasterizePdf(pdf, outDir, { maxPages = MAX_PAGES, splitSpreads = false, label = 'PDF' } = {}) {
+    await fs.promises.rm(outDir, { recursive: true, force: true })
+    await fs.promises.mkdir(outDir, { recursive: true })
+    try {
+        await run(
+            'pdftoppm',
+            ['-jpeg', '-jpegopt', `quality=${JPEG_QUALITY}`, '-scale-to-x', String(PAGE_WIDTH), '-scale-to-y', '-1', '-l', String(maxPages + 1), pdf, path.join(outDir, 'page')],
+            RASTER_TIMEOUT_MS
+        )
+    } catch (err) {
+        // Lỗi đọc PDF thì nói bằng lời của giảng viên; chi tiết kỹ thuật
+        // (stderr) vẫn được ghi vào log ở nơi gọi.
+        if (err.code !== 'ENOENT' && !err.killed) {
+            err.message = 'Không đọc được file PDF này (file hỏng hoặc có đặt mật khẩu). Hãy xuất lại file rồi tải lên.'
+        }
+        throw err
+    }
+
+    // Ảnh thu nhỏ: cùng lệnh, cỡ nhỏ. Hỏng thì bỏ qua — trình xem tự dùng
+    // ảnh lớn thay thế, không đáng để làm hỏng cả bộ.
+    try {
+        await run(
+            'pdftoppm',
+            ['-jpeg', '-jpegopt', `quality=${THUMB_QUALITY}`, '-scale-to-x', String(THUMB_WIDTH), '-scale-to-y', '-1', '-l', String(maxPages), pdf, path.join(outDir, 'thumb')],
+            RASTER_TIMEOUT_MS
+        )
+    } catch (err) {
+        console.warn(`[materialConvert] ${label}: không tạo được ảnh thu nhỏ —`, err.message)
+    }
+    const numberOf = (f) => Number(f.match(/(\d+)\.jpg$/)[1])
+    const byNumber = (prefix) =>
+        new Map(
+            fs.readdirSync(outDir)
+                .filter((f) => new RegExp(`^${prefix}-\\d+\\.jpg$`).test(f))
+                .map((f) => [numberOf(f), f])
+        )
+    const thumbs = byNumber('thumb')
+
+    // pdftoppm đánh số có đệm số 0 theo tổng số trang (page-01.jpg…), nên
+    // sắp theo SỐ chứ không theo chuỗi.
+    const files = (await fs.promises.readdir(outDir))
+        .filter((f) => /^page-\d+\.jpg$/.test(f))
+        .sort((a, b) => numberOf(a) - numberOf(b))
+    if (files.length === 0) throw new Error('File không có trang nào.')
+    if (files.length > maxPages) {
+        throw new Error(`File dài quá ${maxPages} trang. Hãy tách thành nhiều file nhỏ.`)
+    }
+
+    const pages = []
+    for (const file of files) {
+        const size = await imageSize(path.join(outDir, file))
+        const n = numberOf(file)
+        if (splitSpreads && size.width > size.height * 1.15) {
+            // Vẽ lại trang này ở gấp đôi chiều rộng rồi cắt lấy từng nửa —
+            // mỗi nửa vẫn rộng PAGE_WIDTH điểm ảnh, nét như trang dọc.
+            for (const [side, x] of [['a', 0], ['b', PAGE_WIDTH]]) {
+                const crop = (prefix, width, quality) =>
+                    run(
+                        'pdftoppm',
+                        ['-jpeg', '-jpegopt', `quality=${quality}`, '-singlefile', '-f', String(n), '-l', String(n),
+                            '-scale-to-x', String(width * 2), '-scale-to-y', '-1', '-x', String(x === 0 ? 0 : width), '-y', '0', '-W', String(width), '-H', '100000',
+                            pdf, path.join(outDir, `${prefix}-${n}${side}`)],
+                        RASTER_TIMEOUT_MS
+                    )
+                await crop('page', PAGE_WIDTH, JPEG_QUALITY)
+                let thumb = ''
+                try {
+                    await crop('thumb', THUMB_WIDTH, THUMB_QUALITY)
+                    thumb = `thumb-${n}${side}.jpg`
+                } catch { /* dùng ảnh lớn thay */ }
+                const half = await imageSize(path.join(outDir, `page-${n}${side}.jpg`))
+                pages.push({ file: `page-${n}${side}.jpg`, thumb, width: half.width, height: half.height })
+            }
+            await fs.promises.rm(path.join(outDir, file), { force: true })
+            if (thumbs.get(n)) await fs.promises.rm(path.join(outDir, thumbs.get(n)), { force: true })
+            continue
+        }
+        pages.push({ file, thumb: thumbs.get(n) || '', width: size.width, height: size.height })
+    }
+    if (pages.length > maxPages) throw new Error(`File dài quá ${maxPages} trang. Hãy tách thành nhiều file nhỏ.`)
+    return pages
+}
+
+/** Kích thước một file JPEG (đọc phần đầu file). */
+async function imageSize(file) {
+    const head = Buffer.alloc(64 * 1024)
+    const fd = await fs.promises.open(file, 'r')
+    await fd.read(head, 0, head.length, 0)
+    await fd.close()
+    return jpegSize(head) || { width: 0, height: 0 }
+}
+
 async function convertDeck(deckId) {
     const deck = await MaterialDeck.findById(deckId)
     if (!deck || deck.conversion !== 'processing') return
@@ -373,63 +475,7 @@ async function convertDeck(deckId) {
             }
         }
 
-        const outDir = pagesDir(deckId, version)
-        await fs.promises.rm(outDir, { recursive: true, force: true })
-        await fs.promises.mkdir(outDir, { recursive: true })
-        try {
-            await run(
-                'pdftoppm',
-                ['-jpeg', '-jpegopt', `quality=${JPEG_QUALITY}`, '-scale-to-x', String(PAGE_WIDTH), '-scale-to-y', '-1', '-l', String(MAX_PAGES + 1), pdf, path.join(outDir, 'page')],
-                RASTER_TIMEOUT_MS
-            )
-        } catch (err) {
-            // Lỗi đọc PDF thì nói bằng lời của giảng viên; chi tiết kỹ thuật
-            // (stderr) vẫn được ghi vào log ở khối catch bên ngoài.
-            if (err.code !== 'ENOENT' && !err.killed) {
-                err.message = 'Không đọc được file PDF này (file hỏng hoặc có đặt mật khẩu). Hãy xuất lại file rồi tải lên.'
-            }
-            throw err
-        }
-
-        // Ảnh thu nhỏ: cùng lệnh, cỡ nhỏ. Hỏng thì bỏ qua — trình xem tự dùng
-        // ảnh lớn thay thế, không đáng để làm hỏng cả bộ slide.
-        try {
-            await run(
-                'pdftoppm',
-                ['-jpeg', '-jpegopt', `quality=${THUMB_QUALITY}`, '-scale-to-x', String(THUMB_WIDTH), '-scale-to-y', '-1', '-l', String(MAX_PAGES), pdf, path.join(outDir, 'thumb')],
-                RASTER_TIMEOUT_MS
-            )
-        } catch (err) {
-            console.warn(`[materialConvert] Bộ slide ${deckId}: không tạo được ảnh thu nhỏ —`, err.message)
-        }
-        const byNumber = (prefix) =>
-            new Map(
-                fs.readdirSync(outDir)
-                    .filter((f) => new RegExp(`^${prefix}-\\d+\\.jpg$`).test(f))
-                    .map((f) => [Number(f.match(/\d+/)[0]), f])
-            )
-        const thumbs = byNumber('thumb')
-
-        // pdftoppm đánh số có đệm số 0 theo tổng số trang (page-01.jpg…), nên
-        // sắp theo SỐ chứ không theo chuỗi.
-        const files = (await fs.promises.readdir(outDir))
-            .filter((f) => /^page-\d+\.jpg$/.test(f))
-            .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]))
-        if (files.length === 0) throw new Error('File không có trang nào.')
-        if (files.length > MAX_PAGES) {
-            throw new Error(`Bộ slide dài quá ${MAX_PAGES} trang. Hãy tách thành nhiều bộ nhỏ.`)
-        }
-
-        const pages = []
-        for (const file of files) {
-            const head = Buffer.alloc(64 * 1024)
-            const fd = await fs.promises.open(path.join(outDir, file), 'r')
-            await fd.read(head, 0, head.length, 0)
-            await fd.close()
-            const size = jpegSize(head) || { width: 0, height: 0 }
-            const n = Number(file.match(/\d+/)[0])
-            pages.push({ file, thumb: thumbs.get(n) || '', width: size.width, height: size.height })
-        }
+        const pages = await rasterizePdf(pdf, pagesDir(deckId, version), { maxPages: MAX_PAGES, label: `Bộ slide ${deckId}` })
 
         // Giảng viên có thể đã tải file khác trong lúc đang chuyển — chỉ ghi kết
         // quả nếu version vẫn là version vừa chuyển.
@@ -478,14 +524,23 @@ async function removeDeckFiles(deckId) {
 let chain = Promise.resolve()
 const queued = new Set()
 
+/**
+ * Xếp một việc chuyển đổi vào hàng đợi chung (bộ slide và đề luyện thi dùng
+ * chung, để không bao giờ có hai lần chuyển chạy cùng lúc). Cùng `key` đang
+ * chờ thì bỏ qua.
+ */
+function enqueueJob(key, fn) {
+    if (queued.has(key)) return
+    queued.add(key)
+    chain = chain
+        .then(fn)
+        .catch((err) => console.error('[materialConvert] Lỗi không mong đợi:', err.message))
+        .finally(() => queued.delete(key))
+}
+
 function enqueueConversion(deckId) {
     const id = String(deckId)
-    if (queued.has(id)) return
-    queued.add(id)
-    chain = chain
-        .then(() => convertDeck(id))
-        .catch((err) => console.error('[materialConvert] Lỗi không mong đợi:', err.message))
-        .finally(() => queued.delete(id))
+    enqueueJob(`deck:${id}`, () => convertDeck(id))
 }
 
 /**
@@ -521,6 +576,10 @@ module.exports = {
     jpegSize,
     enqueueConversion,
     convertDeck,
+    rasterizePdf,
+    enqueueJob,
+    run,
+    STORAGE_ROOT,
     removeDeckFiles,
     removeOldVersions,
     resumeMaterialConversions,
