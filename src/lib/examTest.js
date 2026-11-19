@@ -125,7 +125,7 @@ function cleanItems(input, groups) {
         const no = Math.round(Number(it?.no))
         const g = map.get(no)
         if (!g) continue
-        const item = { no, answer: '', keyword: '', sample: '', hint: '' }
+        const item = { no, answer: '', keyword: '', sample: '', hint: '', script: text(it.script, 4000), explain: text(it.explain, 4000) }
         if (g.type === 'choice') {
             const a = text(it.answer, 5).toUpperCase()
             if (a && !g.options.includes(a)) throw new Error(`Câu ${no}: đáp án "${a}" không nằm trong các lựa chọn ${g.options.split('').join(', ')}.`)
