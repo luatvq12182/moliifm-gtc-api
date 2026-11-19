@@ -334,9 +334,16 @@ async function loadMyAttempt(req, res) {
 const visiblePages = (test) =>
     (test?.pdf?.conversion === 'ready' ? test.pdf.pages : []).map((p, index) => ({ ...p, index })).filter((p) => !p.hidden)
 
+/** { số câu: { script, explain } } của các câu có nội dung / giải thích. */
+function explanationsOf(test) {
+    const out = {}
+    for (const it of test?.items || []) if (it.script || it.explain) out[it.no] = { script: it.script || '', explain: it.explain || '' }
+    return out
+}
+
 async function attemptView(a) {
     const [test, level] = await Promise.all([
-        ExamTest.findById(a.testId).select('pdf levelId').lean(),
+        ExamTest.findById(a.testId).select('pdf levelId items').lean(),
         ExamLevel.findById(a.levelId).select('name slug').lean(),
     ])
     const cur = a.sections[a.sectionIndex]
@@ -353,6 +360,7 @@ async function attemptView(a) {
         _id: a._id,
         status: a.status,
         title: a.snapshot.title,
+        testId: a.testId,
         level: { name: level?.name || '', slug: level?.slug || '' },
         candidate: a.candidate,
         sections: a.sections.map((x) => ({ id: x.id, label: SECTION_LABEL[x.id], durationSec: x.durationSec })),
@@ -372,6 +380,9 @@ async function attemptView(a) {
         submitReason: a.submitReason,
         // Chỉ có sau khi nộp — lúc đó mới được thấy đáp án đúng.
         result: a.status === 'submitted' ? a.result || null : null,
+        // Đáp án cụ thể + giải thích từng câu — CHỈ sau khi nộp; lấy từ đề hiện tại
+        // (admin sửa giải thích thì bài cũ cũng thấy ngay, không cần chấm lại).
+        explanations: a.status === 'submitted' ? explanationsOf(test) : null,
         canRegrade: a.status === 'submitted' && ['error', 'limited'].includes(a.result?.ai?.status),
     }
 }

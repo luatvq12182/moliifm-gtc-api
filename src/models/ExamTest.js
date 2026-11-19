@@ -53,6 +53,9 @@ const itemSchema = new mongoose.Schema(
         keyword: { type: String, default: '' }, // sentence: từ bắt buộc dùng
         sample: { type: String, default: '' }, // sentence: câu mẫu (hiện ở kết quả, gợi ý cho AI)
         hint: { type: String, default: '' }, // sentence: mô tả tranh (AI không xem được tranh)
+        // Hiện ở trang kết quả sau khi nộp (khách yêu cầu: xem được đáp án cụ thể + giải thích):
+        script: { type: String, default: '' }, // nội dung hội thoại / đoạn văn (phần nghe) kèm pinyin
+        explain: { type: String, default: '' }, // giải thích đáp án (vì sao đúng / sai)
     },
     { _id: false }
 )

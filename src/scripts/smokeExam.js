@@ -326,7 +326,7 @@ async function main() {
 
     // đáp án
     const items = []
-    for (let n = 1; n <= 60; n++) items.push({ no: n, answer: 'ABC'[n % 3] })
+    for (let n = 1; n <= 60; n++) items.push({ no: n, answer: 'ABC'[n % 3], ...(n === 1 ? { script: '男：你好！\nNán: Nǐ hǎo!', explain: 'B 正确：GIAI-THICH-BI-MAT' } : {}) })
     for (let n = 61; n <= 65; n++) items.push({ no: n, answer: ['汽', '图', '空', '方', '礼'][n - 61] })
     for (let n = 66; n <= 70; n++) items.push({ no: n, keyword: ['电话', '聊天儿', '环境', '洗衣机', '放学'][n - 66], hint: 'cô gái đang gọi điện' })
     r = await api('PUT', `/admin/exam/tests/${test._id}`, { token: A, body: { items: [...items.slice(0, 5), { no: 7, answer: 'F' }] } })
@@ -428,7 +428,7 @@ async function main() {
     r = await api('GET', `/exam/attempts/${att}`, { token: tYes })
     let st = r.body
     check('bài làm: đang ở phần nghe, có vé nghe, còn ~7 giây', [st.section, Boolean(st.audio?.path), new Date(st.sectionEndsAt) - new Date(st.serverNow) <= 7000, st.canFinishEarly], ['listening', true, true, false])
-    check('bài làm KHÔNG lộ đáp án (chỉ có từ bắt buộc in sẵn trên đề)', [JSON.stringify(st).includes('汽'), st.keywords['66']], [false, '电话'])
+    check('bài làm KHÔNG lộ đáp án / giải thích (chỉ có từ bắt buộc in sẵn trên đề)', [JSON.stringify(st).includes('汽'), JSON.stringify(st).includes('GIAI-THICH-BI-MAT'), st.explanations, st.keywords['66']], [false, false, null, '电话'])
     check('trang đề: chỉ trang đang hiện', st.pages.map((p) => p.n), [1, 2])
     check('trang của nhóm câu: đổi sang số trang đang hiện (trang 3 bị ẩn -> 0)', st.groups.filter((g) => g.from <= 61 && g.from >= 31).map((g) => g.page), [2, 0, 0, 0, 0, 0])
     r = await api('GET', `/exam/attempts/${att}/pages/1`, { token: tYes })
@@ -513,6 +513,7 @@ async function main() {
         [ga.result.ai.status, ga.result.items['66'].score, ga.result.items['66'].max, ga.result.items['67'].blank, ga.result.items['67'].points], ['unavailable', null, 10, true, 0])
     r = await api('GET', `/exam/attempts/${att}`, { token: tYes })
     check('học viên xem kết quả: đáp án đúng từng câu', [r.body.result.items['31'].correct, r.body.result.items['31'].ok, r.body.result.items['31'].given, r.body.canRegrade], ['B', false, 'D', false])
+    check('...và nội dung + giải thích từng câu (sau khi nộp)', [r.body.explanations['1'].script, r.body.explanations['1'].explain, r.body.explanations['2']], ['男：你好！\nNán: Nǐ hǎo!', 'B 正确：GIAI-THICH-BI-MAT', undefined])
 
     // AI giả
     let aiMode = 'ok'

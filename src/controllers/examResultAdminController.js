@@ -86,6 +86,11 @@ const getAttempt = asyncHandler(async function getAttempt(req, res) {
         keywords: a.snapshot.keywords || {},
         answers: a.answers || {},
         result: a.result || null,
+        explanations: Object.fromEntries(
+            ((await ExamTest.findById(a.testId).select('items').lean())?.items || [])
+                .filter((it) => it.script || it.explain)
+                .map((it) => [it.no, { script: it.script || '', explain: it.explain || '' }])
+        ),
     })
 })
 
