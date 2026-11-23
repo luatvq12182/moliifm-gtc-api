@@ -303,7 +303,7 @@ async function main() {
     // ---------- ĐỀ LUYỆN THI ----------
     console.log('\nĐỀ LUYỆN THI (soạn đề)')
     r = await api('GET', '/admin/exam/templates', { token: A })
-    check('có mẫu đề HSK3', r.body.map((t) => t.id), ['hsk3', 'blank'])
+    check('có mẫu đề HSK3, HSK4', r.body.map((t) => t.id), ['hsk3', 'hsk4', 'blank'])
     r = await api('POST', '/admin/exam/tests', { token: A, body: { levelId: level._id, template: 'hsk3' } })
     let test = r.body
     check('tạo đề theo mẫu HSK3: tên mặc định, 70 câu, 12 nhóm, nháp',
@@ -604,6 +604,37 @@ async function main() {
         check('admin xoá một bài làm', [r.status, await ExamAttempt.countDocuments({ _id: att3 })], [200, 0])
         r = await api('GET', `/admin/exam/attempts`, { token: tYes })
         check('token học viên vào API kết quả admin -> 401', r.status, 401)
+
+        // HSK4: câu 70 viết đoạn văn (AI chấm riêng, thang 50)
+        aiMode = 'ok'
+        delete process.env.EXAM_AI_DAILY_LIMIT
+        r = await api('POST', '/admin/exam/tests', { token: A, body: { levelId: level4._id, template: 'hsk4' } })
+        const t4 = r.body
+        check('mẫu HSK4: 70 câu, 100 + 100 + 100 điểm, câu 70 là đoạn văn 80 chữ / 50 điểm',
+            [t4.questionCount, t4.scores.listening, t4.scores.reading, t4.scores.writing, t4.groups.at(-1).minChars, t4.groups.at(-1).points, t4.timing.writingSec], [70, 100, 100, 100, 80, 50, 1500])
+        const sample4 = '我'.repeat(400)
+        r = await api('PUT', `/admin/exam/tests/${t4._id}`, { token: A, body: { items: [{ no: 65, keyword: '道歉' }, { no: 70, sample: sample4 }] } })
+        check('đoạn văn chưa có đề bài -> còn thiếu; bài mẫu dài không bị cắt', [/\b69 câu/.test(r.body.missing.join(' ')), r.body.items.find((i) => i.no === 70).sample.length], [true, 400])
+        r = await api('PUT', `/admin/exam/tests/${t4._id}`, { token: A, body: { items: [{ no: 65, keyword: '道歉' }, { no: 70, hint: '介绍一位对你影响最大的人', sample: sample4 }] } })
+        check('có đề bài là đủ (không cần từ bắt buộc)', /\b68 câu/.test(r.body.missing.join(' ')), true)
+        const essay = '对我影响最大的人是我的老师。'.repeat(30)
+        const { cleanAnswer } = require('../lib/examAttempt')
+        check('bài viết dài giữ nguyên; đặt câu vẫn cắt 300 chữ',
+            [cleanAnswer(r.body.groups.at(-1), essay).length, cleanAnswer(r.body.groups.at(-2), essay).length], [essay.length, 300])
+        const a4 = await ExamAttempt.create({
+            student: yes._id, testId: t4._id, levelId: level4._id, status: 'submitted', candidate: { name: 'Thí sinh A', phone: PHONES.yes },
+            snapshot: { title: t4.title, groups: r.body.groups, keywords: { 65: '道歉' } }, sections: [{ id: 'writing', durationSec: 1500 }],
+            sectionStartedAt: new Date(), startedAt: new Date(), submittedAt: new Date(), answers: { 65: '他向老师道歉。', 70: essay },
+        })
+        aiCalls = 0
+        r = await api('POST', `/admin/exam/attempts/${a4._id}/regrade`, { token: A })
+        check('chấm HSK4: đặt câu và đoạn văn gọi AI riêng, đủ điểm từng loại',
+            [aiCalls, r.body.result.ai.status, r.body.result.items['65'].max, r.body.result.items['70'].max, r.body.result.items['70'].essay, r.body.result.items['70'].score], [2, 'done', 10, 50, true, 9])
+        const sent4 = JSON.stringify(aiReq)
+        check('...AI nhận đề bài, số chữ đã đếm, thang 0–50, cấp 4, không ảnh, không thông tin thí sinh',
+            [sent4.includes('影响最大的人'), sent4.includes('viết 390 chữ Hán'), /0 ĐẾN 50/.test(aiReq.system), /cấp 4/.test(aiReq.system), /\{(max|level)\}/.test(aiReq.system), aiReq.messages[0].content.some((c) => c.type === 'image'), sent4.includes('Thí sinh A'), sent4.includes(PHONES.yes)],
+            [true, true, true, true, false, false, false, false])
+        await api('DELETE', `/admin/exam/tests/${t4._id}`, { token: A })
     } finally {
         fakeAi.close()
         delete process.env.ANTHROPIC_API_KEY
