@@ -37,6 +37,7 @@ const groupSchema = new mongoose.Schema(
         title: { type: String, default: '' }, // lời dẫn ngắn hiện trên phiếu trả lời
         page: { type: Number, default: 0 }, // trang đề (đếm cả trang ẩn) có nhóm câu này — màn làm bài cuộn tới đó; 0 = không đặt
         points: { type: Number, default: 0 }, // điểm mỗi câu đúng (choice / text)
+        minChars: { type: Number, default: 0 }, // sentence: > 0 = viết ĐOẠN VĂN tối thiểu chừng này chữ Hán (HSK4 câu 70); 0 = đặt một câu
         verdictPoints: {
             dat: { type: Number, default: 0 },
             gan_dat: { type: Number, default: 0 },
@@ -52,7 +53,7 @@ const itemSchema = new mongoose.Schema(
         answer: { type: String, default: '' }, // choice: "B" · text: "汽" hoặc nhiều cách "的/得"
         keyword: { type: String, default: '' }, // sentence: từ bắt buộc dùng
         sample: { type: String, default: '' }, // sentence: câu mẫu (hiện ở kết quả, gợi ý cho AI)
-        hint: { type: String, default: '' }, // sentence: mô tả tranh (AI không xem được tranh)
+        hint: { type: String, default: '' }, // sentence: mô tả tranh (AI không xem được tranh); đoạn văn: đề bài
         // Hiện ở trang kết quả sau khi nộp (khách yêu cầu: xem được đáp án cụ thể + giải thích):
         script: { type: String, default: '' }, // nội dung hội thoại / đoạn văn (phần nghe) kèm pinyin
         explain: { type: String, default: '' }, // giải thích đáp án (vì sao đúng / sai)

@@ -28,6 +28,7 @@ const AUDIO_EXTS = ['mp3', 'm4a', 'aac', 'wav', 'ogg']
 // câu — chữ Hán 10 điểm/câu (đúng mới có điểm), đặt câu AI cho 0–10 điểm/câu
 // (khách chốt theo file đáp án Đề 1 HSK3).
 const PER_30 = 100 / 30
+const PER_32 = 100 / 32 // HSK4: nghe / đọc mỗi phần 32 câu
 
 /**
  * Mẫu đề HSK3 3.0 (70 câu) — theo đề mẫu khách gửi ("ĐỀ 1 HSK3 3.0.pdf").
@@ -51,6 +52,25 @@ const TEMPLATES = {
             { section: 'writing', type: 'text', from: 61, to: 65, title: 'Viết chữ Hán theo phiên âm', points: 10 },
             // Đặt câu: `points` = điểm TỐI ĐA mỗi câu, AI cho điểm từ 0 tới đó.
             { section: 'writing', type: 'sentence', from: 66, to: 70, title: 'Nhìn tranh, dùng từ cho sẵn đặt câu', points: 10 },
+        ],
+    },
+    // Theo đề mẫu "ĐỀ 1 HSK4 3.0.pdf". Viết 100 điểm: 5 câu đặt câu × 10 + đoạn văn 50.
+    hsk4: {
+        label: 'HSK4 3.0 — 70 câu (nghe 32 · đọc 32 · viết 6)',
+        timing: { listeningSec: 0, reviewSec: 300, readingSec: 1800, writingSec: 1500 },
+        groups: [
+            { section: 'listening', type: 'choice', from: 1, to: 7, options: 'ABCD', title: 'Chọn đáp án đúng', points: PER_32 },
+            { section: 'listening', type: 'choice', from: 8, to: 14, options: 'ABCD', title: 'Chọn đáp án đúng', points: PER_32 },
+            { section: 'listening', type: 'choice', from: 15, to: 19, options: 'ABCD', title: 'Chọn đáp án đúng', points: PER_32 },
+            { section: 'listening', type: 'choice', from: 20, to: 32, options: 'ABCD', title: 'Chọn đáp án đúng', points: PER_32 },
+            { section: 'reading', type: 'choice', from: 33, to: 37, options: 'ABCDEF', title: 'Chọn từ điền vào chỗ trống', points: PER_32 },
+            { section: 'reading', type: 'choice', from: 38, to: 42, options: 'ABCDEF', title: 'Chọn từ điền vào chỗ trống', points: PER_32 },
+            { section: 'reading', type: 'choice', from: 43, to: 50, options: 'ABCD', title: 'Đọc đoạn văn, chọn đáp án đúng', points: PER_32 },
+            { section: 'reading', type: 'choice', from: 51, to: 57, options: 'ABCD', title: 'Đọc đoạn văn, chọn đáp án đúng', points: PER_32 },
+            { section: 'reading', type: 'choice', from: 58, to: 60, options: 'ABC', title: 'Chọn câu điền vào chỗ trống', points: PER_32 },
+            { section: 'reading', type: 'choice', from: 61, to: 64, options: 'ABCD', title: 'Chọn câu điền vào chỗ trống', points: PER_32 },
+            { section: 'writing', type: 'sentence', from: 65, to: 69, title: 'Nhìn tranh, dùng từ cho sẵn đặt câu', points: 10 },
+            { section: 'writing', type: 'sentence', from: 70, to: 70, title: 'Viết đoạn văn theo đề bài', points: 50, minChars: 80 },
         ],
     },
     blank: { label: 'Trống — tự khai cấu trúc', timing: { listeningSec: 0, reviewSec: 300, readingSec: 1800, writingSec: 1200 }, groups: [] },
@@ -84,6 +104,7 @@ function cleanGroups(input) {
             title: text(g.title, 200),
             page: Math.round(num(g.page, { max: MAX_PDF_PAGES })),
             points: 0,
+            minChars: type === 'sentence' ? Math.round(num(g.minChars, { max: 500 })) : 0,
             verdictPoints: { dat: 0, gan_dat: 0, chua_dat: 0 },
             options: '',
         }
@@ -134,13 +155,16 @@ function cleanItems(input, groups) {
             item.answer = text(it.answer, 200)
         } else {
             item.keyword = text(it.keyword, 50)
-            item.sample = text(it.sample, 300)
+            item.sample = text(it.sample, isEssay(g) ? 1500 : 300)
             item.hint = text(it.hint, 300)
         }
         out.set(no, item)
     }
     return [...out.values()].sort((a, b) => a.no - b.no)
 }
+
+/** Nhóm câu viết đoạn văn (AI chấm cả đoạn) thay vì đặt một câu. */
+const isEssay = (g) => g?.type === 'sentence' && Number(g.minChars) > 0
 
 /** Điểm tối đa mỗi câu của nhóm (đề cũ: đặt câu chấm theo mức -> mức "đạt"). */
 const sentenceMaxOr = (g) => Number(g.points) || (g.type === 'sentence' ? Number(g.verdictPoints?.dat) || 0 : 0)
@@ -177,7 +201,8 @@ function readiness(test) {
     for (const g of groups) {
         for (let n = g.from; n <= g.to; n++) {
             const it = items.get(n)
-            const ok = g.type === 'sentence' ? Boolean(it?.keyword) : Boolean(it?.answer)
+            // Đặt câu cần từ bắt buộc; đoạn văn cần đề bài (cho AI chấm).
+            const ok = g.type !== 'sentence' ? Boolean(it?.answer) : isEssay(g) ? Boolean(it?.hint) : Boolean(it?.keyword)
             if (!ok) noAnswer.push(n)
         }
     }
@@ -275,6 +300,7 @@ async function resumeExamConversions() {
 
 module.exports = {
     sentenceMaxOr,
+    isEssay,
     EXAM_DIR,
     TEMPLATES,
     SECTIONS,

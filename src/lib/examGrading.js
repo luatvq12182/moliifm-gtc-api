@@ -1,8 +1,9 @@
 const ExamAttempt = require('../models/ExamAttempt')
 const ExamTest = require('../models/ExamTest')
+const ExamLevel = require('../models/ExamLevel')
 const { normalizeAnswer } = require('./exercise')
 const { gradeExamSentences, isAiConfigured } = require('./aiGrader')
-const { testPagePath, sentenceMaxOr } = require('./examTest')
+const { testPagePath, sentenceMaxOr, isEssay } = require('./examTest')
 
 /**
  * CHẤM BÀI LUYỆN THI.
@@ -53,9 +54,10 @@ function scoreAttempt(attempt, test, { aiScores = {}, ai = { status: 'none' } } 
                 const cap = sentenceMaxOr(g)
                 max[g.section] += cap
                 const item = { type: g.type, given, max: cap, keyword: k.keyword || attempt.snapshot.keywords?.[no] || '', sample: k.sample || '' }
+                if (isEssay(g)) Object.assign(item, { essay: true, minChars: g.minChars, hint: k.hint || '' })
                 const v = aiScores[no]
                 if (!given.trim()) {
-                    Object.assign(item, { blank: true, score: 0, points: 0, ok: false, comment: 'Bạn chưa viết câu này.' })
+                    Object.assign(item, { blank: true, score: 0, points: 0, ok: false, comment: isEssay(g) ? 'Bạn chưa viết bài này.' : 'Bạn chưa viết câu này.' })
                 } else if (v) {
                     const score = Math.max(0, Math.min(cap, v.score ?? Math.round(cap * (VERDICT_RATIO[v.verdict] || 0))))
                     Object.assign(item, { score, points: score, ok: score >= cap * PASS_RATIO, comment: v.comment || '', corrected: v.corrected || '' })
@@ -99,7 +101,7 @@ function scoreAttempt(attempt, test, { aiScores = {}, ai = { status: 'none' } } 
     }
 }
 
-/** Câu đặt câu cần AI chấm (có viết). */
+/** Câu đặt câu / đoạn văn cần AI chấm (có viết). */
 function sentenceTodo(attempt, test) {
     const key = new Map((test?.items || []).map((it) => [it.no, it]))
     const out = []
@@ -118,10 +120,18 @@ function sentenceTodo(attempt, test) {
                 answer,
                 page: g.page || 0,
                 max: sentenceMaxOr(g),
+                essay: isEssay(g),
+                minChars: g.minChars || 0,
             })
         }
     }
     return out
+}
+
+/** Cấp HSK (số) của cấp thi, vd. "hsk4" -> 4; không đoán được thì 3. */
+async function levelNumber(levelId) {
+    const level = await ExamLevel.findById(levelId).select('slug name').lean()
+    return Number((`${level?.slug || ''} ${level?.name || ''}`.match(/hsk\s*([1-9])/i) || [])[1]) || 3
 }
 
 const running = new Set()
@@ -167,18 +177,24 @@ async function gradeAttempt(attemptId, { keepAi = false, ignoreLimit = false } =
         await ExamAttempt.updateOne({ _id: id }, { $set: { result: scoreAttempt(attempt, test, { ai: { status: 'pending', startedAt: new Date() } }) } })
         let result
         try {
-            const pageNos = [...new Set(todo.map((t) => t.page).filter(Boolean))]
-            const pageImages = pageNos.map((n) => testPagePath(test, n - 1)).filter(Boolean)
-            // Mỗi nhóm có thể có điểm tối đa khác nhau -> gọi AI theo từng mức (thường chỉ một).
+            const level = await levelNumber(attempt.levelId)
+            // Mỗi nhóm có thể có điểm tối đa khác nhau, đoạn văn chấm riêng -> gọi AI
+            // theo từng loại (thường chỉ một, HSK4 là hai).
             const scores = {}
             let model = ''
-            for (const cap of [...new Set(todo.map((t) => t.max))]) {
-                const graded = await gradeExamSentences(
-                    todo.filter((t) => t.max === cap),
-                    { maxScore: cap, pageImages }
-                )
+            const kinds = new Map()
+            for (const t of todo) {
+                const kind = `${t.essay}:${t.max}`
+                kinds.set(kind, [...(kinds.get(kind) || []), t])
+            }
+            for (const list of kinds.values()) {
+                const { essay, max } = list[0]
+                // Đoạn văn: đề bài là chữ, không cần gửi ảnh trang đề.
+                const pageNos = essay ? [] : [...new Set(list.map((t) => t.page).filter(Boolean))]
+                const pageImages = pageNos.map((n) => testPagePath(test, n - 1)).filter(Boolean)
+                const graded = await gradeExamSentences(list, { maxScore: max, pageImages, essay, level })
                 model = graded.model || model
-                for (const t of todo.filter((x) => x.max === cap)) scores[t.examNo] = graded.items[t.id]
+                for (const t of list) scores[t.examNo] = graded.items[t.id]
             }
             result = scoreAttempt(attempt, test, { aiScores: scores, ai: { status: 'done', model, at: new Date() } })
         } catch (err) {

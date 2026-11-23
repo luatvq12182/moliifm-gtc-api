@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken')
 const ExamAttempt = require('../models/ExamAttempt')
-const { listeningSec } = require('./examTest')
+const { listeningSec, isEssay } = require('./examTest')
 
 /**
  * LƯỢT LÀM ĐỀ — chia phần, đồng hồ máy chủ, câu nào sửa được lúc nào, vé
@@ -117,7 +117,7 @@ function cleanAnswer(group, value) {
         const a = v.trim().toUpperCase()
         return a === '' || (a.length === 1 && group.options.includes(a)) ? a : null
     }
-    return v.slice(0, group.type === 'sentence' ? 300 : 50)
+    return v.slice(0, isEssay(group) ? 1500 : group.type === 'sentence' ? 300 : 50)
 }
 
 // Vé nghe: khoá riêng (không dùng lẫn được với token đăng nhập), hết hạn ngay
